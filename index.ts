@@ -74,10 +74,12 @@ import {
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
+  show_status?: boolean;
 }
 
 const DEFAULT_CONFIG: SandboxConfig = {
   enabled: true,
+  show_status: true,
   network: {
     allowedDomains: [
       "npmjs.org",
@@ -131,6 +133,7 @@ function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): Sand
   const result: SandboxConfig = { ...base };
 
   if (overrides.enabled !== undefined) result.enabled = overrides.enabled;
+  if (overrides.show_status !== undefined) result.show_status = overrides.show_status;
   if (overrides.network) {
     result.network = { ...base.network, ...overrides.network };
   }
@@ -752,10 +755,10 @@ export default function (pi: ExtensionAPI) {
 
       const networkCount = config.network?.allowedDomains?.length ?? 0;
       const writeCount = config.filesystem?.allowWrite?.length ?? 0;
-      ctx.ui.setStatus(
-        "sandbox",
-        ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkCount} domains, ${writeCount} write paths`),
-      );
+      if (config.show_status) {
+        const status_text = `🔒 Sandbox: ${networkCount} domains, ${writeCount} write paths`;
+        ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", status_text));
+      }
     } catch (err) {
       sandboxEnabled = false;
       ctx.ui.notify(
