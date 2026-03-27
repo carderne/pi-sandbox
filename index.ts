@@ -421,55 +421,35 @@ export default function (pi: ExtensionAPI) {
 
   // ── UI prompts ──────────────────────────────────────────────────────────────
 
-  async function promptDomainBlock(
+  const BLOCK_PROMPT_OPTIONS = [
+    "Allow for this session only",
+    "Allow for this project  →  .pi/sandbox.json",
+    "Allow for all projects  →  ~/.pi/agent/sandbox.json",
+    "Abort (keep blocked)",
+  ] as const;
+
+  async function promptSandboxBlock(
     ctx: ExtensionContext,
-    domain: string,
+    message: string,
   ): Promise<"abort" | "session" | "project" | "global"> {
     if (!ctx.hasUI) return "abort";
-    const choice = await ctx.ui.select(`🌐 Network blocked: "${domain}" is not in allowedDomains`, [
-      "Abort (keep blocked)",
-      "Allow for this session only",
-      "Allow for this project  →  .pi/sandbox.json",
-      "Allow for all projects  →  ~/.pi/agent/sandbox.json",
-    ]);
+    const choice = await ctx.ui.select(message, [...BLOCK_PROMPT_OPTIONS]);
     if (!choice || choice.startsWith("Abort")) return "abort";
     if (choice.startsWith("Allow for this session")) return "session";
     if (choice.startsWith("Allow for this project")) return "project";
     return "global";
   }
 
-  async function promptReadBlock(
-    ctx: ExtensionContext,
-    filePath: string,
-  ): Promise<"abort" | "session" | "project" | "global"> {
-    if (!ctx.hasUI) return "abort";
-    const choice = await ctx.ui.select(`📖 Read blocked: "${filePath}" is not in allowRead`, [
-      "Abort (keep blocked)",
-      "Allow for this session only",
-      "Allow for this project  →  .pi/sandbox.json",
-      "Allow for all projects  →  ~/.pi/agent/sandbox.json",
-    ]);
-    if (!choice || choice.startsWith("Abort")) return "abort";
-    if (choice.startsWith("Allow for this session")) return "session";
-    if (choice.startsWith("Allow for this project")) return "project";
-    return "global";
+  async function promptDomainBlock(ctx: ExtensionContext, domain: string) {
+    return promptSandboxBlock(ctx, `🌐 Network blocked: "${domain}" is not in allowedDomains`);
   }
 
-  async function promptWriteBlock(
-    ctx: ExtensionContext,
-    filePath: string,
-  ): Promise<"abort" | "session" | "project" | "global"> {
-    if (!ctx.hasUI) return "abort";
-    const choice = await ctx.ui.select(`📝 Write blocked: "${filePath}" is not in allowWrite`, [
-      "Abort (keep blocked)",
-      "Allow for this session only",
-      "Allow for this project  →  .pi/sandbox.json",
-      "Allow for all projects  →  ~/.pi/agent/sandbox.json",
-    ]);
-    if (!choice || choice.startsWith("Abort")) return "abort";
-    if (choice.startsWith("Allow for this session")) return "session";
-    if (choice.startsWith("Allow for this project")) return "project";
-    return "global";
+  async function promptReadBlock(ctx: ExtensionContext, filePath: string) {
+    return promptSandboxBlock(ctx, `📖 Read blocked: "${filePath}" is not in allowRead`);
+  }
+
+  async function promptWriteBlock(ctx: ExtensionContext, filePath: string) {
+    return promptSandboxBlock(ctx, `📝 Write blocked: "${filePath}" is not in allowWrite`);
   }
 
   // ── Apply allowance choices ─────────────────────────────────────────────────
