@@ -44,9 +44,13 @@
  *     "allowRead": [".", "~/.config", "~/.local", "Library"],
  *     "allowWrite": [".", "/tmp"],
  *     "denyWrite": [".env"]
- *   }
+ *   },
+ *   "promptOrder": ["abort", "session", "project", "global"]
  * }
  * ```
+ *
+ * promptOrder controls the order choices appear in the block prompt.
+ * Valid values: "session", "project", "global", "abort".
  *
  * Usage:
  * - `pi -e ./sandbox` - sandbox enabled with default/config settings
@@ -72,8 +76,11 @@ import {
   isToolCallEventType,
 } from "@mariozechner/pi-coding-agent";
 
+type PromptChoice = "session" | "project" | "global" | "abort";
+
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
+  promptOrder?: PromptChoice[];
 }
 
 const DEFAULT_CONFIG: SandboxConfig = {
@@ -100,6 +107,15 @@ const DEFAULT_CONFIG: SandboxConfig = {
     denyWrite: [".env", ".env.*", "*.pem", "*.key"],
   },
 };
+
+const PROMPT_CHOICE_LABELS: Record<PromptChoice, string> = {
+  session: "Allow for this session only",
+  project: "Allow for this project  →  .pi/sandbox.json",
+  global: "Allow for all projects  →  ~/.pi/agent/sandbox.json",
+  abort: "Abort (keep blocked)",
+};
+
+const DEFAULT_PROMPT_ORDER: PromptChoice[] = ["abort", "session", "project", "global"];
 
 function loadConfig(cwd: string): SandboxConfig {
   const projectConfigPath = join(cwd, ".pi", "sandbox.json");
@@ -137,6 +153,7 @@ function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): Sand
   if (overrides.filesystem) {
     result.filesystem = { ...base.filesystem, ...overrides.filesystem };
   }
+  if (overrides.promptOrder) result.promptOrder = overrides.promptOrder;
 
   const extOverrides = overrides as {
     ignoreViolations?: Record<string, string[]>;
@@ -350,6 +367,13 @@ function createSandboxedBashOps(): BashOperations {
   };
 }
 
+// ── Prompt order ─────────────────────────────────────────────────────────────
+
+function resolvePromptOptions(cwd: string): PromptChoice[] {
+  const config = loadConfig(cwd);
+  return config.promptOrder ?? DEFAULT_PROMPT_ORDER;
+}
+
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -421,35 +445,30 @@ export default function (pi: ExtensionAPI) {
 
   // ── UI prompts ──────────────────────────────────────────────────────────────
 
-  const BLOCK_PROMPT_OPTIONS = [
-    "Allow for this session only",
-    "Allow for this project  →  .pi/sandbox.json",
-    "Allow for all projects  →  ~/.pi/agent/sandbox.json",
-    "Abort (keep blocked)",
-  ] as const;
-
   async function promptSandboxBlock(
     ctx: ExtensionContext,
     message: string,
-  ): Promise<"abort" | "session" | "project" | "global"> {
+    cwd: string,
+  ): Promise<PromptChoice> {
     if (!ctx.hasUI) return "abort";
-    const choice = await ctx.ui.select(message, [...BLOCK_PROMPT_OPTIONS]);
-    if (!choice || choice.startsWith("Abort")) return "abort";
-    if (choice.startsWith("Allow for this session")) return "session";
-    if (choice.startsWith("Allow for this project")) return "project";
-    return "global";
+    const order = resolvePromptOptions(cwd);
+    const displayOptions = order.map((key) => PROMPT_CHOICE_LABELS[key]);
+    const choice = await ctx.ui.select(message, displayOptions);
+    if (!choice) return "abort";
+    const matched = order.find((key) => PROMPT_CHOICE_LABELS[key] === choice);
+    return matched ?? "abort";
   }
 
   async function promptDomainBlock(ctx: ExtensionContext, domain: string) {
-    return promptSandboxBlock(ctx, `🌐 Network blocked: "${domain}" is not in allowedDomains`);
+    return promptSandboxBlock(ctx, `🌐 Network blocked: "${domain}" is not in allowedDomains`, ctx.cwd);
   }
 
   async function promptReadBlock(ctx: ExtensionContext, filePath: string) {
-    return promptSandboxBlock(ctx, `📖 Read blocked: "${filePath}" is not in allowRead`);
+    return promptSandboxBlock(ctx, `📖 Read blocked: "${filePath}" is not in allowRead`, ctx.cwd);
   }
 
   async function promptWriteBlock(ctx: ExtensionContext, filePath: string) {
-    return promptSandboxBlock(ctx, `📝 Write blocked: "${filePath}" is not in allowWrite`);
+    return promptSandboxBlock(ctx, `📝 Write blocked: "${filePath}" is not in allowWrite`, ctx.cwd);
   }
 
   // ── Apply allowance choices ─────────────────────────────────────────────────
