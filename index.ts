@@ -190,7 +190,7 @@ function domainIsAllowed(domain: string, allowedDomains: string[]): boolean {
 
 /** Extract a path from a bash "Operation not permitted" OS sandbox error. */
 function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(/(?:\/bin\/bash|bash|sh): (\/[^\s:]+): Operation not permitted/);
+  const match = output.match(/(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/);
   return match ? match[1] : null;
 }
 
