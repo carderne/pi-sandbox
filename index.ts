@@ -81,6 +81,7 @@ import {
   isToolCallEventType,
 } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
+import { shouldPromptForWrite } from "./policy.js";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
@@ -827,7 +828,7 @@ export default function (pi: ExtensionAPI) {
       const allowWrite = getEffectiveAllowWrite(ctx.cwd);
       const denyWrite = config.filesystem?.denyWrite ?? [];
 
-      if (allowWrite.length > 0 && !matchesPattern(path, allowWrite)) {
+      if (shouldPromptForWrite(path, allowWrite, matchesPattern)) {
         const choice = await promptWriteBlock(ctx, path);
         if (choice === "abort") {
           return {
