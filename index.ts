@@ -68,8 +68,8 @@ import { SandboxManager, type SandboxRuntimeConfig } from "@carderne/sandbox-run
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
   type BashOperations,
-  createBashTool,
   getAgentDir,
+  isBashToolResult,
   isToolCallEventType,
 } from "@mariozechner/pi-coding-agent";
 
@@ -360,9 +360,6 @@ export default function (pi: ExtensionAPI) {
     default: false,
   });
 
-  const localCwd = process.cwd();
-  const localBash = createBashTool(localCwd);
-
   let sandboxEnabled = false;
   let sandboxInitialized = false;
 
@@ -511,67 +508,6 @@ export default function (pi: ExtensionAPI) {
     await reinitializeSandbox(cwd);
   }
 
-  // ── Bash tool — with write-block detection and retry ───────────────────────
-
-  pi.registerTool({
-    ...localBash,
-    label: "bash (sandboxed)",
-    async execute(id, params, signal, onUpdate, ctx) {
-      const runBash = () => {
-        if (!sandboxEnabled || !sandboxInitialized) {
-          return localBash.execute(id, params, signal, onUpdate);
-        }
-        const sandboxedBash = createBashTool(localCwd, {
-          operations: createSandboxedBashOps(),
-        });
-        return sandboxedBash.execute(id, params, signal, onUpdate);
-      };
-
-      const result = await runBash();
-
-      // Post-execution: detect OS-level write block and offer to allow.
-      if (sandboxEnabled && sandboxInitialized && ctx?.hasUI) {
-        const outputText = result.content
-          .filter((c: any) => c.type === "text")
-          .map((c: any) => c.text)
-          .join("\n");
-
-        const blockedPath = extractBlockedWritePath(outputText);
-        if (blockedPath) {
-          const choice = await promptWriteBlock(ctx, blockedPath);
-          if (choice !== "abort") {
-            await applyWriteChoice(choice, blockedPath, ctx.cwd);
-
-            // Check if denyWrite would still block it even after allowing.
-            const config = loadConfig(ctx.cwd);
-            const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
-            if (matchesPattern(blockedPath, config.filesystem?.denyWrite ?? [])) {
-              ctx.ui.notify(
-                `⚠️ "${blockedPath}" was added to allowWrite, but it is also in denyWrite and will remain blocked.\n` +
-                  `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
-                "warning",
-              );
-              return result;
-            }
-
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `\n--- Write access granted for "${blockedPath}", retrying ---\n`,
-                },
-              ],
-              details: {},
-            });
-            return runBash();
-          }
-        }
-      }
-
-      return result;
-    },
-  });
-
   // ── user_bash — network pre-check ──────────────────────────────────────────
 
   pi.on("user_bash", async (event, ctx) => {
@@ -608,9 +544,13 @@ export default function (pi: ExtensionAPI) {
 
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
 
-    // Network pre-check for bash tool calls.
+    // Bash: network pre-check + wrap command with sandbox.
+    // We don't own the bash tool (avoids conflict with pi-tool-display);
+    // instead we mutate event.input.command so the active bash tool runs the
+    // OS-sandboxed command. ToolCallEvent input is mutable per pi docs.
     if (sandboxEnabled && sandboxInitialized && isToolCallEventType("bash", event)) {
-      const domains = extractDomainsFromCommand(event.input.command);
+      const originalCommand = event.input.command;
+      const domains = extractDomainsFromCommand(originalCommand);
       const effectiveDomains = getEffectiveAllowedDomains(ctx.cwd);
       for (const domain of domains) {
         if (!domainIsAllowed(domain, effectiveDomains)) {
@@ -623,6 +563,16 @@ export default function (pi: ExtensionAPI) {
           }
           await applyDomainChoice(choice, domain, ctx.cwd);
         }
+      }
+
+      // Wrap with OS sandbox (sandbox-exec / bwrap).
+      try {
+        event.input.command = await SandboxManager.wrapWithSandbox(originalCommand);
+      } catch (err) {
+        ctx.ui.notify(
+          `Sandbox wrap failed: ${err instanceof Error ? err.message : err}. Running unsandboxed.`,
+          "warning",
+        );
       }
     }
 
@@ -692,6 +642,55 @@ export default function (pi: ExtensionAPI) {
         };
       }
     }
+  });
+
+  // ── tool_result — detect OS-level write block in bash output ───────────────────
+  //
+  // We don't own bash.execute (avoids conflict with pi-tool-display), so we
+  // can't re-run the command in-place. Instead, after the active bash tool
+  // runs the wrapped command, inspect output: if sandbox blocked a write,
+  // prompt user, update config, then inject a retry instruction into the
+  // result content for the LLM to retry on its next turn.
+
+  pi.on("tool_result", async (event, ctx) => {
+    if (!sandboxEnabled || !sandboxInitialized) return;
+    if (!isBashToolResult(event)) return;
+    if (!ctx.hasUI) return;
+
+    const outputText = event.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+
+    const blockedPath = extractBlockedWritePath(outputText);
+    if (!blockedPath) return;
+
+    const choice = await promptWriteBlock(ctx, blockedPath);
+    if (choice === "abort") return;
+
+    await applyWriteChoice(choice, blockedPath, ctx.cwd);
+
+    const freshConfig = loadConfig(ctx.cwd);
+    const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
+    if (matchesPattern(blockedPath, freshConfig.filesystem?.denyWrite ?? [])) {
+      ctx.ui.notify(
+        `⚠️ "${blockedPath}" was added to allowWrite, but it is also in denyWrite and will remain blocked.\n` +
+          `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+        "warning",
+      );
+      return;
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text:
+            outputText +
+            `\n\n[Sandbox] Write access granted for "${blockedPath}". Please retry the command.`,
+        },
+      ],
+    };
   });
 
   // ── session_start ───────────────────────────────────────────────────────────
