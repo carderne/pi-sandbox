@@ -603,13 +603,15 @@ export default function (pi: ExtensionAPI) {
   // ── tool_call — network pre-check for bash, path policy for read/write/edit
 
   pi.on("tool_call", async (event, ctx) => {
+    if (!sandboxEnabled) return;
+
     const config = loadConfig(ctx.cwd);
     if (!config.enabled) return;
 
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
 
     // Network pre-check for bash tool calls.
-    if (sandboxEnabled && sandboxInitialized && isToolCallEventType("bash", event)) {
+    if (sandboxInitialized && isToolCallEventType("bash", event)) {
       const domains = extractDomainsFromCommand(event.input.command);
       const effectiveDomains = getEffectiveAllowedDomains(ctx.cwd);
       for (const domain of domains) {
