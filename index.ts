@@ -65,7 +65,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { SandboxManager, type SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
-import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import {
   type BashOperations,
   createBashTool,
@@ -190,7 +194,9 @@ function domainIsAllowed(domain: string, allowedDomains: string[]): boolean {
 
 /** Extract a path from a bash "Operation not permitted" OS sandbox error. */
 function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(/(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/);
+  const match = output.match(
+    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
+  );
   return match ? match[1] : null;
 }
 
