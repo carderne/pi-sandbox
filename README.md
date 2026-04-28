@@ -19,6 +19,38 @@ These open significant security loopholes, so shouldn't be used in a sensitive c
 You may need to trial and error to find additional things you need to allow.
 
 ## Quickstart
+
+#### Prerequisites
+
+`pi-sandbox` delegates the OS-level bash sandbox to
+[Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime),
+which checks for [`ripgrep`](https://github.com/BurntSushi/ripgrep) (the
+`rg` binary) on **both macOS and Linux** at sandbox-init time. If `rg`
+is not on the `PATH` that pi was launched with, sandbox initialization
+fails with:
+
+```
+Sandbox initialization failed: Sandbox dependencies not available: ripgrep (rg) not found
+```
+
+Install ripgrep before enabling the extension:
+
+| Platform | Install |
+|---|---|
+| macOS (Homebrew) | `brew install ripgrep` |
+| macOS (MacPorts) | `sudo port install ripgrep` |
+| Linux (Debian/Ubuntu) | `sudo apt install ripgrep` |
+| Linux (Fedora/RHEL) | `sudo dnf install ripgrep` |
+| Linux (Arch) | `sudo pacman -S ripgrep` |
+| From source / other | <https://github.com/BurntSushi/ripgrep#installation> |
+
+If `which rg` succeeds in your shell but pi still reports `rg not
+found`, pi is being launched from a parent process whose `PATH` does
+not include the directory containing `rg` (common when GUI launchers
+inherit a minimal non-login `PATH`). On macOS, `/opt/homebrew/bin` and
+`/usr/local/bin` are the usual culprits — make sure your launcher's
+environment includes whichever one your install uses.
+
 #### Install
 ```bash
 pi install npm:pi-sandbox
