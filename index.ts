@@ -64,7 +64,11 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { SandboxManager, type SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
+import {
+  SandboxManager,
+  type SandboxAskCallback,
+  type SandboxRuntimeConfig,
+} from "@carderne/sandbox-runtime";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
   type BashOperations,
@@ -176,6 +180,7 @@ function extractDomainsFromCommand(command: string): string[] {
 }
 
 function domainMatchesPattern(domain: string, pattern: string): boolean {
+  if (pattern === "*") return true;
   if (pattern.startsWith("*.")) {
     const base = pattern.slice(2);
     return domain === base || domain.endsWith("." + base);
@@ -183,8 +188,16 @@ function domainMatchesPattern(domain: string, pattern: string): boolean {
   return domain === pattern;
 }
 
+function allowsAllDomains(allowedDomains: string[] | undefined): boolean {
+  return allowedDomains?.includes("*") ?? false;
+}
+
 function domainIsAllowed(domain: string, allowedDomains: string[]): boolean {
   return allowedDomains.some((p) => domainMatchesPattern(domain, p));
+}
+
+function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCallback {
+  return async ({ host }) => domainIsAllowed(host, allowedDomains);
 }
 
 // ── Output analysis ───────────────────────────────────────────────────────────
@@ -398,23 +411,27 @@ export default function (pi: ExtensionAPI) {
     const config = loadConfig(cwd);
     const configExt = config as unknown as { allowBrowserProcess?: boolean };
     try {
+      const network = {
+        ...config.network,
+        allowedDomains: [...(config.network?.allowedDomains ?? []), ...sessionAllowedDomains],
+        deniedDomains: config.network?.deniedDomains ?? [],
+      };
       await SandboxManager.reset();
-      await SandboxManager.initialize({
-        network: {
-          ...config.network,
-          allowedDomains: [...(config.network?.allowedDomains ?? []), ...sessionAllowedDomains],
-          deniedDomains: config.network?.deniedDomains ?? [],
+      await SandboxManager.initialize(
+        {
+          network,
+          filesystem: {
+            ...config.filesystem,
+            denyRead: config.filesystem?.denyRead ?? [],
+            allowRead: config.filesystem?.allowRead ?? [],
+            allowWrite: [...(config.filesystem?.allowWrite ?? []), ...sessionAllowedWritePaths],
+            denyWrite: config.filesystem?.denyWrite ?? [],
+          },
+          allowBrowserProcess: configExt.allowBrowserProcess,
+          enableWeakerNetworkIsolation: true,
         },
-        filesystem: {
-          ...config.filesystem,
-          denyRead: config.filesystem?.denyRead ?? [],
-          allowRead: config.filesystem?.allowRead ?? [],
-          allowWrite: [...(config.filesystem?.allowWrite ?? []), ...sessionAllowedWritePaths],
-          denyWrite: config.filesystem?.denyWrite ?? [],
-        },
-        allowBrowserProcess: configExt.allowBrowserProcess,
-        enableWeakerNetworkIsolation: true,
-      });
+        createNetworkAskCallback(network.allowedDomains),
+      );
     } catch (e) {
       console.error(`Warning: Failed to reinitialize sandbox: ${e}`);
     }
@@ -471,6 +488,15 @@ export default function (pi: ExtensionAPI) {
     if (choice.startsWith("Allow for this session")) return "session";
     if (choice.startsWith("Allow for this project")) return "project";
     return "global";
+  }
+
+  function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxConfig): void {
+    if (!allowsAllDomains(config.network?.allowedDomains)) return;
+    ctx.ui.notify(
+      '⚠️ Network sandbox allows all domains because network.allowedDomains contains "*". ' +
+        'Only use this intentionally; remove "*" to restore per-domain prompts.',
+      "warning",
+    );
   }
 
   // ── Apply allowance choices ─────────────────────────────────────────────────
@@ -729,14 +755,17 @@ export default function (pi: ExtensionAPI) {
         allowBrowserProcess?: boolean;
       };
 
-      await SandboxManager.initialize({
-        network: config.network,
-        filesystem: config.filesystem,
-        ignoreViolations: configExt.ignoreViolations,
-        enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
-        allowBrowserProcess: configExt.allowBrowserProcess,
-        enableWeakerNetworkIsolation: true,
-      });
+      await SandboxManager.initialize(
+        {
+          network: config.network,
+          filesystem: config.filesystem,
+          ignoreViolations: configExt.ignoreViolations,
+          enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
+          allowBrowserProcess: configExt.allowBrowserProcess,
+          enableWeakerNetworkIsolation: true,
+        },
+        createNetworkAskCallback(config.network?.allowedDomains ?? []),
+      );
 
       // Make Node's built-in fetch() honour HTTP_PROXY / HTTPS_PROXY in this
       // process and any child processes that inherit the environment.
@@ -752,11 +781,15 @@ export default function (pi: ExtensionAPI) {
       sandboxEnabled = true;
       sandboxInitialized = true;
 
-      const networkCount = config.network?.allowedDomains?.length ?? 0;
+      warnIfAllDomainsAllowed(ctx, config);
+
+      const networkLabel = allowsAllDomains(config.network?.allowedDomains)
+        ? "all domains"
+        : `${config.network?.allowedDomains?.length ?? 0} domains`;
       const writeCount = config.filesystem?.allowWrite?.length ?? 0;
       ctx.ui.setStatus(
         "sandbox",
-        ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkCount} domains, ${writeCount} write paths`),
+        ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkLabel}, ${writeCount} write paths`),
       );
     } catch (err) {
       sandboxEnabled = false;
@@ -803,26 +836,30 @@ export default function (pi: ExtensionAPI) {
           allowBrowserProcess?: boolean;
         };
 
-        await SandboxManager.initialize({
-          network: config.network,
-          filesystem: config.filesystem,
-          ignoreViolations: configExt.ignoreViolations,
-          enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
-          allowBrowserProcess: configExt.allowBrowserProcess,
-          enableWeakerNetworkIsolation: true,
-        });
+        await SandboxManager.initialize(
+          {
+            network: config.network,
+            filesystem: config.filesystem,
+            ignoreViolations: configExt.ignoreViolations,
+            enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
+            allowBrowserProcess: configExt.allowBrowserProcess,
+            enableWeakerNetworkIsolation: true,
+          },
+          createNetworkAskCallback(config.network?.allowedDomains ?? []),
+        );
 
         sandboxEnabled = true;
         sandboxInitialized = true;
 
-        const networkCount = config.network?.allowedDomains?.length ?? 0;
+        warnIfAllDomainsAllowed(ctx, config);
+
+        const networkLabel = allowsAllDomains(config.network?.allowedDomains)
+          ? "all domains"
+          : `${config.network?.allowedDomains?.length ?? 0} domains`;
         const writeCount = config.filesystem?.allowWrite?.length ?? 0;
         ctx.ui.setStatus(
           "sandbox",
-          ctx.ui.theme.fg(
-            "accent",
-            `🔒 Sandbox: ${networkCount} domains, ${writeCount} write paths`,
-          ),
+          ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkLabel}, ${writeCount} write paths`),
         );
         ctx.ui.notify("Sandbox enabled", "info");
       } catch (err) {
@@ -875,6 +912,9 @@ export default function (pi: ExtensionAPI) {
         "",
         "Network (bash + !cmd):",
         `  Allowed domains: ${config.network?.allowedDomains?.join(", ") || "(none)"}`,
+        ...(allowsAllDomains(config.network?.allowedDomains)
+          ? ['  ⚠️ "*" allows all domains and disables per-domain prompts.']
+          : []),
         `  Denied domains:  ${config.network?.deniedDomains?.join(", ") || "(none)"}`,
         ...(sessionAllowedDomains.length > 0
           ? [`  Session allowed: ${sessionAllowedDomains.join(", ")}`]

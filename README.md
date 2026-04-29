@@ -4,7 +4,7 @@ Sandbox for [pi](https://pi.dev/).
 
 Sandboxes pi like this:
 - read/write/edit: direct control using allow/deny lists
-- bash: uses [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime) to control network and file system access
+- bash: uses [`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime) to control network and file system access
 
 When a blocked action is attempted, the user is
 prompted to allow it temporarily or permanently rather than silently failing.
@@ -23,8 +23,11 @@ You may need to trial and error to find additional things you need to allow.
 #### Prerequisites
 
 `pi-sandbox` delegates the OS-level bash sandbox to
-[Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime),
-which checks for [`ripgrep`](https://github.com/BurntSushi/ripgrep) (the
+[`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime),
+published from the fork at <https://github.com/carderne/sandbox-runtime>,
+which is forked from Anthropic's
+[`anthropic-experimental/sandbox-runtime`](https://github.com/anthropic-experimental/sandbox-runtime).
+The sandbox runtime checks for [`ripgrep`](https://github.com/BurntSushi/ripgrep) (the
 `rg` binary) on **both macOS and Linux** at sandbox-init time. If `rg`
 is not on the `PATH` that pi was launched with, sandbox initialization
 fails with:
@@ -131,7 +134,9 @@ If a path is added to `allowWrite` via a prompt but is also present in
 `denyWrite`, it remains blocked. A warning is shown explaining which config
 files to check.
 
-`allowedDomains` supports `*.example.com` wildcards. `allowWrite` uses prefix
+`allowedDomains` supports `*.example.com` wildcards. It also supports `"*"` to
+allow all domains; pi-sandbox shows a warning when this is configured because it
+removes per-domain prompts and can be easy to add accidentally. `allowWrite` uses prefix
 matching, so `.` covers the entire current working directory.
 
 > **⚠️ Read and write have different precedence rules:**
