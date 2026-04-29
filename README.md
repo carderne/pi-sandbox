@@ -60,7 +60,7 @@ pi install npm:pi-sandbox
 ```
 
 #### Configure
-Add a config like this either to `~/.pi/agent` (global) or to `.pi/sandbox.json` (local).
+Add a config like this either to `~/.pi/agent/sandbox.json` (global) or to `.pi/sandbox.json` (local).
 Local config takes precedence over global.
 
 Note below that the order of precedence for filesystem read and write are opposite.
