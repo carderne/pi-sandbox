@@ -208,7 +208,9 @@ function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCallback 
 
 /** Extract a path from a bash "Operation not permitted" OS sandbox error. */
 function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(/(?:\/bin\/bash|bash|sh): (\/[^\s:]+): Operation not permitted/);
+  const match = output.match(
+    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
+  );
   return match ? match[1] : null;
 }
 
@@ -557,7 +559,23 @@ export default function (pi: ExtensionAPI) {
         return sandboxedBash.execute(id, params, signal, onUpdate);
       };
 
-      const result = await runBash();
+      let result: AgentToolResult<any>;
+      try {
+        result = await runBash();
+      } catch (e) {
+        if (!(e instanceof Error)) throw e;
+        if (!e.message.includes("Operation not permitted")) throw e;
+
+        result = {
+          content: [
+            {
+              type: "text",
+              text: `Error: Command failed with OS-level sandbox restriction: ${e.message}`,
+            },
+          ],
+          details: {},
+        };
+      }
 
       // Post-execution: detect OS-level write block and offer to allow.
       if (sandboxEnabled && sandboxInitialized && ctx?.hasUI) {
