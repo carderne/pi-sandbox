@@ -81,7 +81,6 @@ import {
   isToolCallEventType,
 } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
-import { shouldPromptForWrite } from "./policy.js";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
@@ -174,6 +173,15 @@ function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): Sand
 }
 
 // ── Domain helpers ────────────────────────────────────────────────────────────
+
+export function shouldPromptForWrite(
+  path: string,
+  allowWrite: string[],
+  matchesPattern: (path: string, patterns: string[]) => boolean,
+): boolean {
+  // Secure default: empty allowWrite means deny-all writes (prompt every path).
+  return allowWrite.length === 0 || !matchesPattern(path, allowWrite);
+}
 
 function extractDomainsFromCommand(command: string): string[] {
   const urlRegex = /https?:\/\/([a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
@@ -622,7 +630,7 @@ export default function (pi: ExtensionAPI) {
     if (!allowsAllDomains(config.network?.allowedDomains)) return;
     ctx.ui.notify(
       '⚠️ Network sandbox allows all domains because network.allowedDomains contains "*". ' +
-        'Only use this intentionally; remove "*" to restore per-domain prompts.',
+      'Only use this intentionally; remove "*" to restore per-domain prompts.',
       "warning",
     );
   }
@@ -718,7 +726,7 @@ export default function (pi: ExtensionAPI) {
             if (matchesPattern(blockedPath, config.filesystem?.denyWrite ?? [])) {
               ctx.ui.notify(
                 `⚠️ "${blockedPath}" was added to allowWrite, but it is also in denyWrite and will remain blocked.\n` +
-                  `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+                `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
                 "warning",
               );
               return result;
@@ -842,7 +850,7 @@ export default function (pi: ExtensionAPI) {
         if (matchesPattern(path, denyWrite)) {
           ctx.ui.notify(
             `⚠️ "${path}" was added to allowWrite, but it is also in denyWrite and will remain blocked.\n` +
-              `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+            `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
             "warning",
           );
           return {
