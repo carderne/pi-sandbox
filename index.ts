@@ -69,7 +69,11 @@ import {
   type SandboxAskCallback,
   type SandboxRuntimeConfig,
 } from "@carderne/sandbox-runtime";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import {
   type BashOperations,
   createBashTool,
