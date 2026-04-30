@@ -466,8 +466,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   const PERMISSION_OPTIONS: PromptOption[] = [
-    { label: "Abort (keep blocked)", key: "esc", action: "abort" },
     { label: "Allow for this session only", key: "s", action: "session" },
+    { label: "Abort (keep blocked)", key: "esc", action: "abort" },
     {
       label: "Allow for this project",
       key: "P",
