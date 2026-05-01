@@ -894,7 +894,7 @@ export default function (pi: ExtensionAPI) {
         return sandboxedBash.execute(id, params, signal, onUpdate);
       };
 
-      const runUnsandboxed = () => localBash.execute(id + "-retry", params, signal, onUpdate);
+      const runUnsandboxed = () => localBash.execute(id, params, signal, onUpdate);
 
       // Check user-configured unsandboxed patterns first
       const unsandboxedPatterns = getEffectiveUnsandboxedCommands(ctx.cwd);
