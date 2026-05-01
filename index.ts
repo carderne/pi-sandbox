@@ -629,9 +629,9 @@ export default function (pi: ExtensionAPI) {
   ];
 
   const BYPASS_OPTIONS: PromptOption[] = [
-    { label: "Abort (keep failed result)", key: "esc", action: "abort" },
     { label: "Retry without sandbox (once)", key: "o", action: "once" },
     { label: "Retry without sandbox in this session", key: "s", action: "session" },
+    { label: "Abort (keep failed result)", key: "esc", action: "abort" },
     {
       label: "Retry without sandbox for this project",
       key: "P",
