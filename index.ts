@@ -1494,14 +1494,22 @@ export default function (pi: ExtensionAPI) {
           sessionAllowedWritePaths?: string[];
           sessionUnsandboxedCommands?: string[];
         };
-        if (data.sessionAllowedDomains) sessionAllowedDomains.push(...data.sessionAllowedDomains);
-        if (data.sessionAllowedReadPaths)
+        if (data.sessionAllowedDomains) {
+          sessionAllowedDomains.length = 0;
+          sessionAllowedDomains.push(...data.sessionAllowedDomains);
+        }
+        if (data.sessionAllowedReadPaths) {
+          sessionAllowedReadPaths.length = 0;
           sessionAllowedReadPaths.push(...data.sessionAllowedReadPaths);
-        if (data.sessionAllowedWritePaths)
+        }
+        if (data.sessionAllowedWritePaths) {
+          sessionAllowedWritePaths.length = 0;
           sessionAllowedWritePaths.push(...data.sessionAllowedWritePaths);
-        if (data.sessionUnsandboxedCommands)
+        }
+        if (data.sessionUnsandboxedCommands) {
+          sessionUnsandboxedCommands.length = 0;
           sessionUnsandboxedCommands.push(...data.sessionUnsandboxedCommands);
-        break; // Only read the most recent entry
+        }
       }
     }
 
