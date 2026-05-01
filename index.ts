@@ -957,6 +957,7 @@ export default function (pi: ExtensionAPI) {
           .map((c: any) => c.text)
           .join("\n");
         const exitCode = (result.details as any)?.exitCode ?? 0;
+        let bypassAccepted = false;
         const failurePatterns =
           loadConfig(ctx.cwd).sandboxFailurePatterns ?? DEFAULT_FAILURE_PATTERNS;
         if (isSandboxFailure(outputText, failurePatterns) && exitCode !== 0) {
@@ -1042,12 +1043,14 @@ export default function (pi: ExtensionAPI) {
             });
 
             result = await runUnsandboxed();
+            bypassAccepted = true;
           }
         }
 
         // Also check for OS-level write block (separate from sandbox failure)
+        // Skip if bypass was accepted — the unsandboxed retry already handled the write.
         const blockedPath = extractBlockedWritePath(outputText);
-        if (blockedPath) {
+        if (blockedPath && !bypassAccepted) {
           const choice = await promptWriteBlock(ctx, blockedPath);
           if (choice !== "abort") {
             await applyWriteChoice(choice, blockedPath, ctx.cwd);
