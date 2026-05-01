@@ -316,6 +316,7 @@ const DEFAULT_FAILURE_PATTERNS: string[] = [
   "terminal prompts disabled",
   "could not read username",
   "permission denied",
+  "requires authentication",
 ];
 
 /**
