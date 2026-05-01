@@ -894,7 +894,31 @@ export default function (pi: ExtensionAPI) {
         return sandboxedBash.execute(id, params, signal, onUpdate);
       };
 
-      const runUnsandboxed = () => localBash.execute(id, params, signal, onUpdate);
+      const runUnsandboxed = async () => {
+        const localOps = createLocalBashOperations();
+        let output = "";
+        try {
+          const r = await localOps.exec(command, localCwd, {
+            onData: (chunk) => {
+              output += chunk;
+            },
+          });
+          return {
+            content: [{ type: "text", text: output }],
+            details: { exitCode: r.exitCode },
+          } as any;
+        } catch (e) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error: ${e instanceof Error ? e.message : String(e)}`,
+              },
+            ],
+            details: { exitCode: 1 },
+          };
+        }
+      };
 
       // Check user-configured unsandboxed patterns first
       const unsandboxedPatterns = getEffectiveUnsandboxedCommands(ctx.cwd);
