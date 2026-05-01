@@ -886,6 +886,7 @@ export default function (pi: ExtensionAPI) {
     label: "bash (sandboxed)",
     async execute(id, params, signal, onUpdate, ctx) {
       const command = (params as { command?: string }).command ?? "";
+      ctx.ui.notify(`NOTIFY TEST: ${command.slice(0, 40)}`, "info");
 
       const runSandboxed = () => {
         const sandboxedBash = createBashTool(localCwd, {
