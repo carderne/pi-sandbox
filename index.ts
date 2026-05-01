@@ -703,10 +703,9 @@ export default function (pi: ExtensionAPI) {
           },
 
           handleInput(data: string): void {
-            // Passthrough: let pi handle app-level keys (Ctrl+O expand, etc.)
-            if (matchesKey(data, Key.ctrl("o")) || matchesKey(data, Key.ctrl("p"))) {
-              return;
-            }
+            // NOTE: pi routes ALL keyboard input to this component when focused.
+            // App-level keys like Ctrl+O (expand) are NOT processed. Workaround:
+            // esc to dismiss, expand tool output, then re-trigger the prompt.
 
             if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
               resolve("abort");
