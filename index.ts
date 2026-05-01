@@ -1590,7 +1590,7 @@ export default function (pi: ExtensionAPI) {
       sessionAllowedWritePaths.length > 0 ||
       sessionUnsandboxedCommands.length > 0
     ) {
-      pi.appendEntry("sandbox-session", {
+      await pi.appendEntry("sandbox-session", {
         sessionAllowedDomains: [...sessionAllowedDomains],
         sessionAllowedReadPaths: [...sessionAllowedReadPaths],
         sessionAllowedWritePaths: [...sessionAllowedWritePaths],
