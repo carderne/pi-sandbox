@@ -1037,11 +1037,6 @@ export default function (pi: ExtensionAPI) {
               unsandboxed: true,
             });
 
-            onUpdate?.({
-              content: [{ type: "text", text: `\n--- Retrying unsandboxed ---\n` }],
-              details: {},
-            });
-
             result = await runUnsandboxed();
             bypassAccepted = true;
           }
