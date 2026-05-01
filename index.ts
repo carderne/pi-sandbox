@@ -906,7 +906,7 @@ export default function (pi: ExtensionAPI) {
             ? command.trimStart().slice(0, 80) + "…"
             : command.trimStart();
         const level = getUnsandboxedCommandLevel(command, ctx.cwd, sessionUnsandboxedCommands);
-        ctx.ui.notify(`🔓 Sandbox bypassed for "${displayCmd}" (${level})`, "warning");
+        ctx.ui.notify(`🔓 Sandbox disabled: "${displayCmd}" (${level} config)`, "warning");
         auditLog({
           timestamp: new Date().toISOString(),
           command: command.trimStart().split(/\s+/).join(" "),
@@ -917,7 +917,7 @@ export default function (pi: ExtensionAPI) {
         pi.sendMessage(
           {
             customType: "sandbox-bypass",
-            content: `User allowed unsandboxed execution of "${displayCmd}" (${level} bypass)`,
+            content: `User pre-configured unsandboxed execution of exact command "${displayCmd}" (${level})`,
             display: false,
           },
           {
@@ -963,11 +963,11 @@ export default function (pi: ExtensionAPI) {
               command.trimStart().length > 80
                 ? command.trimStart().slice(0, 80) + "…"
                 : command.trimStart();
-            ctx.ui.notify(`🛡️  Sandbox bypass declined for "${displayCmd}"`, "info");
+            ctx.ui.notify(`🛡️  Kept sandboxed: "${displayCmd}"`, "info");
             pi.sendMessage(
               {
                 customType: "sandbox-bypass",
-                content: `User declined unsandboxed execution of "${displayCmd}" (kept sandboxed failure)`,
+                content: `User declined unsandboxed retry of "${displayCmd}"`,
                 display: false,
               },
               {
@@ -1008,12 +1008,15 @@ export default function (pi: ExtensionAPI) {
                     ? "project"
                     : "global";
 
-            ctx.ui.notify(`🔓 Sandbox bypassed for "${displayCmd}" (${bypassLabel})`, "warning");
+            ctx.ui.notify(
+              `🔓 Retried without sandbox: "${displayCmd}" (exact match, ${bypassLabel})`,
+              "warning",
+            );
 
             pi.sendMessage(
               {
                 customType: "sandbox-bypass",
-                content: `User allowed unsandboxed execution of "${displayCmd}" (${bypassLabel} bypass after sandbox failure)`,
+                content: `User retried "${displayCmd}" without sandbox (exact match, ${bypassLabel})`,
                 display: false,
               },
               {
@@ -1155,7 +1158,7 @@ export default function (pi: ExtensionAPI) {
           ? event.command.trimStart().slice(0, 80) + "…"
           : event.command.trimStart();
       const level = getUnsandboxedCommandLevel(event.command, ctx.cwd, sessionUnsandboxedCommands);
-      ctx.ui.notify(`🔓 Sandbox bypassed for "${displayCmd}" (${level})`, "warning");
+      ctx.ui.notify(`🔓 Sandbox disabled: "${displayCmd}" (${level} config)`, "warning");
       auditLog({
         timestamp: new Date().toISOString(),
         command: event.command.trimStart().split(/\s+/).join(" "),
@@ -1166,7 +1169,7 @@ export default function (pi: ExtensionAPI) {
       pi.sendMessage(
         {
           customType: "sandbox-bypass",
-          content: `User allowed unsandboxed execution of "${displayCmd}" (${level} bypass)`,
+          content: `User pre-configured unsandboxed execution of exact command "${displayCmd}" (${level})`,
           display: false,
         },
         {
@@ -1207,11 +1210,11 @@ export default function (pi: ExtensionAPI) {
           event.command.trimStart().length > 80
             ? event.command.trimStart().slice(0, 80) + "…"
             : event.command.trimStart();
-        ctx.ui.notify(`🛡️  Sandbox bypass declined for "${displayCmd}"`, "info");
+        ctx.ui.notify(`🛡️  Kept sandboxed: "${displayCmd}"`, "info");
         pi.sendMessage(
           {
             customType: "sandbox-bypass",
-            content: `User declined unsandboxed execution of "${displayCmd}" (kept sandboxed failure)`,
+            content: `User declined unsandboxed retry of "${displayCmd}"`,
             display: false,
           },
           {
@@ -1253,12 +1256,15 @@ export default function (pi: ExtensionAPI) {
             ? event.command.trimStart().slice(0, 80) + "…"
             : event.command.trimStart();
 
-        ctx.ui.notify(`🔓 Sandbox bypassed for "${displayCmd}" (${bypassLabel})`, "warning");
+        ctx.ui.notify(
+          `🔓 Retried without sandbox: "${displayCmd}" (exact match, ${bypassLabel})`,
+          "warning",
+        );
 
         pi.sendMessage(
           {
             customType: "sandbox-bypass",
-            content: `User allowed unsandboxed execution of "${displayCmd}" (${bypassLabel} bypass after sandbox failure)`,
+            content: `User retried "${displayCmd}" without sandbox (exact match, ${bypassLabel})`,
             display: false,
           },
           {
