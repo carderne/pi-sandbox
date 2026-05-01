@@ -703,6 +703,11 @@ export default function (pi: ExtensionAPI) {
           },
 
           handleInput(data: string): void {
+            // Passthrough: let pi handle app-level keys (Ctrl+O expand, etc.)
+            if (matchesKey(data, Key.ctrl("o")) || matchesKey(data, Key.ctrl("p"))) {
+              return;
+            }
+
             if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
               resolve("abort");
               return;
