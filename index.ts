@@ -2,7 +2,8 @@
  * Based on https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/examples/extensions/sandbox/index.ts
  * by Mario Zechner, used under the MIT License.
  *
- * Sandbox Extension - OS-level sandboxing for pi with interactive permission prompts.
+ * Sandbox Extension - OS-level sandboxing for bash commands, plus path policy
+ * enforcement for pi's read/write/edit tools, with interactive permission prompts.
  *
  * Uses @carderne/sandbox-runtime to enforce filesystem and network
  * restrictions on bash commands at the OS level (sandbox-exec on macOS,
@@ -87,8 +88,9 @@ import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
   /**
-   * Commands that always run unsandboxed (e.g. ["gh", "security"]).
-   * Matched by first word; persists across sessions.
+   * Commands that always run unsandboxed (e.g. ["gh auth token"]).
+   * Matched by exact full command string. Persists via config file.
+   * Override via "unsandboxedCommands" key in sandbox.json.
    */
   unsandboxedCommands?: string[];
   /**
@@ -100,7 +102,6 @@ interface SandboxConfig extends SandboxRuntimeConfig {
 
 const DEFAULT_CONFIG: SandboxConfig = {
   enabled: true,
-  unsandboxedCommands: [],
   network: {
     allowedDomains: [
       "npmjs.org",
@@ -124,12 +125,19 @@ const DEFAULT_CONFIG: SandboxConfig = {
   },
 };
 
-const AUDIT_LOG = join(homedir(), ".pi", "sandbox", "audit.log");
+const AUDIT_LOG = join(homedir(), ".pi", "agent", "sandbox", "audit.log");
 function auditLog(entry: {
   timestamp: string;
   command: string;
   type: "predictive" | "reactive";
-  choice: "once" | "session" | "project" | "global" | "project-level" | "system-level" | "declined";
+  choice:
+    | "once"
+    | "session"
+    | "project"
+    | "global"
+    | "project-config"
+    | "global-config"
+    | "declined";
   unsandboxed: boolean;
 }): void {
   try {
@@ -143,14 +151,14 @@ function auditLog(entry: {
 
 /**
  * Determine the config level for an unsandboxed command.
- * Returns "project-level", "system-level", or "session" based on which config
- * contains the command.
+ * Returns "project-config", "global-config", or "session" based on which config
+ * contains the command. "-config" suffix means no user interaction occurred.
  */
 function getUnsandboxedCommandLevel(
   command: string,
   cwd: string,
   sessionCommands: string[],
-): "project-level" | "system-level" | "session" {
+): "project-config" | "global-config" | "session" {
   const normalized = command.trimStart().split(/\s+/).join(" ");
 
   // Check session first
@@ -164,7 +172,7 @@ function getUnsandboxedCommandLevel(
     try {
       const projectConfig = JSON.parse(readFileSync(projectConfigPath, "utf-8"));
       if (projectConfig.unsandboxedCommands?.includes(normalized)) {
-        return "project-level";
+        return "project-config";
       }
     } catch {
       /* ignore */
@@ -177,7 +185,7 @@ function getUnsandboxedCommandLevel(
     try {
       const globalConfig = JSON.parse(readFileSync(globalConfigPath, "utf-8"));
       if (globalConfig.unsandboxedCommands?.includes(normalized)) {
-        return "system-level";
+        return "global-config";
       }
     } catch {
       /* ignore */
@@ -185,7 +193,7 @@ function getUnsandboxedCommandLevel(
   }
 
   // Fallback — shouldn't happen if commandIsUnsandboxed matched
-  return "project-level";
+  return "project-config";
 }
 
 function loadConfig(cwd: string): SandboxConfig {
@@ -621,7 +629,7 @@ export default function (pi: ExtensionAPI) {
     },
     {
       label: "Allow for all projects",
-      key: "A",
+      key: "G",
       action: "global",
       confirm: true,
       hint: "→ ~/.pi/agent/sandbox.json",
@@ -641,7 +649,7 @@ export default function (pi: ExtensionAPI) {
     },
     {
       label: "Retry without sandbox for all projects",
-      key: "A",
+      key: "G",
       action: "global",
       confirm: true,
       hint: "→ ~/.pi/agent/sandbox.json",
