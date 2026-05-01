@@ -450,7 +450,7 @@ function createSandboxedBashOps(): BashOperations {
         throw new Error(`Working directory does not exist: ${cwd}`);
       }
 
-      const wrappedCommand = await SandboxManager.wrapWithSandbox(command);
+      const wrappedCommand = await SandboxManager.wrapWithSandbox("set -o pipefail && " + command);
 
       return new Promise((resolve, reject) => {
         const child = spawn("bash", ["-c", wrappedCommand], {
