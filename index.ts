@@ -1482,9 +1482,29 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ── session_start ───────────────────────────────────────────────────────────
+  // ── session_start — restore persisted state, then init sandbox ────────────
 
   pi.on("session_start", async (_event, ctx) => {
+    // Restore session allowances from previous execution (survives reload)
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "sandbox-session") {
+        const data = entry.data as {
+          sessionAllowedDomains?: string[];
+          sessionAllowedReadPaths?: string[];
+          sessionAllowedWritePaths?: string[];
+          sessionUnsandboxedCommands?: string[];
+        };
+        if (data.sessionAllowedDomains) sessionAllowedDomains.push(...data.sessionAllowedDomains);
+        if (data.sessionAllowedReadPaths)
+          sessionAllowedReadPaths.push(...data.sessionAllowedReadPaths);
+        if (data.sessionAllowedWritePaths)
+          sessionAllowedWritePaths.push(...data.sessionAllowedWritePaths);
+        if (data.sessionUnsandboxedCommands)
+          sessionUnsandboxedCommands.push(...data.sessionUnsandboxedCommands);
+        break; // Only read the most recent entry
+      }
+    }
+
     const noSandbox = pi.getFlag("no-sandbox") as boolean;
 
     if (noSandbox) {
@@ -1560,9 +1580,23 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ── session_shutdown ────────────────────────────────────────────────────────
+  // ── session_shutdown — persist + cleanup ────────────────────────────────────
 
   pi.on("session_shutdown", async () => {
+    // Save session allowances so they survive reload
+    if (
+      sessionAllowedDomains.length > 0 ||
+      sessionAllowedReadPaths.length > 0 ||
+      sessionAllowedWritePaths.length > 0 ||
+      sessionUnsandboxedCommands.length > 0
+    ) {
+      pi.appendEntry("sandbox-session", {
+        sessionAllowedDomains: [...sessionAllowedDomains],
+        sessionAllowedReadPaths: [...sessionAllowedReadPaths],
+        sessionAllowedWritePaths: [...sessionAllowedWritePaths],
+        sessionUnsandboxedCommands: [...sessionUnsandboxedCommands],
+      });
+    }
     sessionAllowedDomains.length = 0;
     sessionAllowedReadPaths.length = 0;
     sessionAllowedWritePaths.length = 0;
