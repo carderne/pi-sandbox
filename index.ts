@@ -659,6 +659,8 @@ export default function (pi: ExtensionAPI) {
       (tui, theme, _kb, done) => {
         let selectedIndex = 0;
         let pendingAction: "abort" | "session" | "project" | "global" | "once" | null = null;
+        let renderedAt = 0;
+        const DEBOUNCE_MS = 400;
 
         function resolve(action: "abort" | "session" | "project" | "global" | "once") {
           done(action);
@@ -666,6 +668,7 @@ export default function (pi: ExtensionAPI) {
 
         return {
           render(width: number): string[] {
+            if (renderedAt === 0) renderedAt = Date.now();
             const lines: string[] = [];
             lines.push(truncateToWidth(theme.fg("warning", title), width));
             lines.push("");
@@ -706,6 +709,20 @@ export default function (pi: ExtensionAPI) {
             // NOTE: pi routes ALL keyboard input to this component when focused.
             // App-level keys like Ctrl+O (expand) are NOT processed. Workaround:
             // esc to dismiss, expand tool output, then re-trigger the prompt.
+
+            // Debounce: ignore single-key presses for DEBOUNCE_MS after prompt appears.
+            // Prevents accidental selection when user is typing in chat text box.
+            // Navigation keys (arrows, enter, escape) are always allowed.
+            if (
+              Date.now() - renderedAt < DEBOUNCE_MS &&
+              !matchesKey(data, Key.enter) &&
+              !matchesKey(data, Key.escape) &&
+              !matchesKey(data, Key.ctrl("c")) &&
+              !matchesKey(data, Key.up) &&
+              !matchesKey(data, Key.down)
+            ) {
+              return;
+            }
 
             if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
               resolve("abort");
