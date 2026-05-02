@@ -152,7 +152,6 @@ function auditLog(entry: {
 
 /**
  * Determine the config level for an unsandboxed command.
- * Determine the config level for an unsandboxed command.
  * Returns "project-config", "global-config", or "session" based on which config
  * contains the command. "-config" suffix means no user interaction occurred.
  */
