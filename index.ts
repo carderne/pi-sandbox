@@ -632,45 +632,51 @@ export default function (pi: ExtensionAPI) {
     hint?: string;
   }
 
-  const PERMISSION_OPTIONS: PromptOption[] = [
-    { label: "Allow once", key: "o", action: "once" },
-    { label: "Allow for this session only", key: "s", action: "session" },
-    { label: "Abort (keep blocked)", key: "esc", action: "abort" },
-    {
-      label: "Allow for this project",
-      key: "P",
-      action: "project",
-      confirm: true,
-      hint: "→ .pi/sandbox.json",
-    },
-    {
-      label: "Allow for all projects",
-      key: "G",
-      action: "global",
-      confirm: true,
-      hint: "→ ~/.pi/agent/sandbox.json",
-    },
-  ];
+  interface PromptLabels {
+    once: string;
+    session: string;
+    abort: string;
+    project: string;
+    global: string;
+  }
 
-  const BYPASS_OPTIONS: PromptOption[] = [
-    { label: "Retry without sandbox (once)", key: "o", action: "once" },
-    { label: "Retry without sandbox in this session", key: "s", action: "session" },
-    { label: "Abort (keep failed result)", key: "esc", action: "abort" },
-    {
-      label: "Retry without sandbox for this project",
-      key: "P",
-      action: "project",
-      confirm: true,
-      hint: "→ .pi/sandbox.json",
-    },
-    {
-      label: "Retry without sandbox for all projects",
-      key: "G",
-      action: "global",
-      confirm: true,
-      hint: "→ ~/.pi/agent/sandbox.json",
-    },
-  ];
+  function buildPromptOptions(labels: PromptLabels): PromptOption[] {
+    return [
+      { label: labels.once, key: "o", action: "once" },
+      { label: labels.session, key: "s", action: "session" },
+      { label: labels.abort, key: "esc", action: "abort" },
+      {
+        label: labels.project,
+        key: "P",
+        action: "project",
+        confirm: true,
+        hint: "→ .pi/sandbox.json",
+      },
+      {
+        label: labels.global,
+        key: "G",
+        action: "global",
+        confirm: true,
+        hint: "→ ~/.pi/agent/sandbox.json",
+      },
+    ];
+  }
+
+  const PERMISSION_OPTIONS = buildPromptOptions({
+    once: "Allow once",
+    session: "Allow for this session only",
+    abort: "Abort (keep blocked)",
+    project: "Allow for this project",
+    global: "Allow for all projects",
+  });
+
+  const BYPASS_OPTIONS = buildPromptOptions({
+    once: "Retry without sandbox (once)",
+    session: "Retry without sandbox in this session",
+    abort: "Abort (keep failed result)",
+    project: "Retry without sandbox for this project",
+    global: "Retry without sandbox for all projects",
+  });
 
   /** True if the key event is a navigation key (arrows, enter, escape). */
   function isNavigationKey(data: string): boolean {
