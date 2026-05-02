@@ -159,19 +159,16 @@ function getUnsandboxedCommandLevel(
   cwd: string,
   sessionCommands: string[],
 ): "project-config" | "global-config" | "session" {
-  const normalized = command.trimStart().split(/\s+/).join(" ");
+  const normalized = normalizeCmd(command);
 
-  // Check session first
-  if (sessionCommands.includes(normalized)) {
-    return "session";
-  }
+  if (sessionCommands.includes(normalized)) return "session";
 
-  // Check project config
+  // Check project config (normalize on read to handle manual edits)
   const projectConfigPath = join(cwd, ".pi", "sandbox.json");
   if (existsSync(projectConfigPath)) {
     try {
       const projectConfig = JSON.parse(readFileSync(projectConfigPath, "utf-8"));
-      if (projectConfig.unsandboxedCommands?.includes(normalized)) {
+      if ((projectConfig.unsandboxedCommands as string[] | undefined)?.map(normalizeCmd).includes(normalized)) {
         return "project-config";
       }
     } catch {
@@ -179,12 +176,12 @@ function getUnsandboxedCommandLevel(
     }
   }
 
-  // Check global config
+  // Check global config (normalize on read to handle manual edits)
   const globalConfigPath = join(getAgentDir(), "sandbox.json");
   if (existsSync(globalConfigPath)) {
     try {
       const globalConfig = JSON.parse(readFileSync(globalConfigPath, "utf-8"));
-      if (globalConfig.unsandboxedCommands?.includes(normalized)) {
+      if ((globalConfig.unsandboxedCommands as string[] | undefined)?.map(normalizeCmd).includes(normalized)) {
         return "global-config";
       }
     } catch {
@@ -192,7 +189,6 @@ function getUnsandboxedCommandLevel(
     }
   }
 
-  // Fallback — shouldn't happen if commandIsUnsandboxed matched
   return "project-config";
 }
 
@@ -331,7 +327,7 @@ const DEFAULT_FAILURE_PATTERNS: string[] = [
  * Check if a command starts with any of the unsandboxed patterns.
  */
 function commandIsUnsandboxed(command: string, patterns: string[]): boolean {
-  const normalized = command.trimStart().split(/\s+/).join(" ");
+  const normalized = normalizeCmd(command);
   return patterns.some((p) => normalized === p);
 }
 
@@ -355,6 +351,21 @@ function extractBlockedWritePath(output: string): string | null {
 }
 
 // ── Path pattern matching ─────────────────────────────────────────────────────
+
+// ── Action label helper ───────────────────────────────────────────────────────
+
+/** Convert an Action enum to a human-readable label. */
+function actionLabel(action: "abort" | "session" | "project" | "global" | "once" | "project-config" | "global-config" | "declined"): string {
+  return action === "once" ? "once" : action === "session" ? "session"
+    : action === "project" ? "project" : "global";
+}
+
+// ── Command normalization ─────────────────────────────────────────────────────
+
+/** Normalize a command for consistent comparison. Trims, collapses whitespace. */
+function normalizeCmd(cmd: string): string {
+  return cmd.trim().split(/\s+/).join(" ");
+}
 
 function matchesPattern(filePath: string, patterns: string[]): boolean {
   const expanded = filePath.replace(/^~/, homedir());
@@ -392,9 +403,16 @@ function readOrEmptyConfig(configPath: string): Partial<SandboxConfig> {
   }
 }
 
-function writeConfigFile(configPath: string, config: Partial<SandboxConfig>): void {
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+/** Returns true on success, false if the file could not be written. */
+function writeConfigFile(configPath: string, config: Partial<SandboxConfig>): boolean {
+  try {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    return true;
+  } catch (e) {
+    console.error(`Failed to write config ${configPath}: ${e}`);
+    return false;
+  }
 }
 
 function addDomainToConfig(configPath: string, domain: string): void {
@@ -442,7 +460,7 @@ function addWritePathToConfig(configPath: string, pathToAdd: string): void {
 function addUnsandboxedCommandToConfig(configPath: string, command: string): void {
   const config = readOrEmptyConfig(configPath);
   const existing = config.unsandboxedCommands ?? [];
-  const normalized = command.trimStart().split(/\s+/).join(" ");
+  const normalized = normalizeCmd(command);
   if (normalized && !existing.includes(normalized)) {
     config.unsandboxedCommands = [...existing, normalized];
     writeConfigFile(configPath, config);
@@ -564,7 +582,7 @@ export default function (pi: ExtensionAPI) {
 
   function getEffectiveUnsandboxedCommands(cwd: string): string[] {
     const config = loadConfig(cwd);
-    return [...(config.unsandboxedCommands ?? []), ...sessionUnsandboxedCommands];
+    return [...(config.unsandboxedCommands ?? []).map(normalizeCmd), ...sessionUnsandboxedCommands];
   }
 
   // ── Sandbox reinitialize ────────────────────────────────────────────────────
@@ -588,7 +606,7 @@ export default function (pi: ExtensionAPI) {
           filesystem: {
             ...config.filesystem,
             denyRead: config.filesystem?.denyRead ?? [],
-            allowRead: config.filesystem?.allowRead ?? [],
+            allowRead: [...(config.filesystem?.allowRead ?? []), ...sessionAllowedReadPaths],
             allowWrite: [...(config.filesystem?.allowWrite ?? []), ...sessionAllowedWritePaths],
             denyWrite: config.filesystem?.denyWrite ?? [],
           },
@@ -856,13 +874,19 @@ export default function (pi: ExtensionAPI) {
     cwd: string,
   ): Promise<void> {
     const { globalPath, projectPath } = getConfigPaths(cwd);
-    if (choice !== "once" && !sessionAllowedDomains.includes(domain))
-      sessionAllowedDomains.push(domain);
+    if (choice === "session") sessionAllowedDomains.push(domain);
     if (choice === "project") addDomainToConfig(projectPath, domain);
     if (choice === "global") addDomainToConfig(globalPath, domain);
-    if (choice === "once") sessionAllowedDomains.push(domain);
+    if (choice === "once") {
+      sessionAllowedDomains.push(domain);
+      try {
+        await reinitializeSandbox(cwd);
+      } finally {
+        sessionAllowedDomains.pop();
+      }
+      return;
+    }
     await reinitializeSandbox(cwd);
-    if (choice === "once") sessionAllowedDomains.pop();
   }
 
   async function applyReadChoice(
@@ -871,13 +895,19 @@ export default function (pi: ExtensionAPI) {
     cwd: string,
   ): Promise<void> {
     const { globalPath, projectPath } = getConfigPaths(cwd);
-    if (choice !== "once" && !sessionAllowedReadPaths.includes(filePath))
-      sessionAllowedReadPaths.push(filePath);
+    if (choice === "session") sessionAllowedReadPaths.push(filePath);
     if (choice === "project") addReadPathToConfig(projectPath, filePath);
     if (choice === "global") addReadPathToConfig(globalPath, filePath);
-    if (choice === "once") sessionAllowedReadPaths.push(filePath);
+    if (choice === "once") {
+      sessionAllowedReadPaths.push(filePath);
+      try {
+        await reinitializeSandbox(cwd);
+      } finally {
+        sessionAllowedReadPaths.pop();
+      }
+      return;
+    }
     await reinitializeSandbox(cwd);
-    if (choice === "once") sessionAllowedReadPaths.pop();
   }
 
   async function applyWriteChoice(
@@ -886,13 +916,19 @@ export default function (pi: ExtensionAPI) {
     cwd: string,
   ): Promise<void> {
     const { globalPath, projectPath } = getConfigPaths(cwd);
-    if (choice !== "once" && !sessionAllowedWritePaths.includes(filePath))
-      sessionAllowedWritePaths.push(filePath);
+    if (choice === "session") sessionAllowedWritePaths.push(filePath);
     if (choice === "project") addWritePathToConfig(projectPath, filePath);
     if (choice === "global") addWritePathToConfig(globalPath, filePath);
-    if (choice === "once") sessionAllowedWritePaths.push(filePath);
+    if (choice === "once") {
+      sessionAllowedWritePaths.push(filePath);
+      try {
+        await reinitializeSandbox(cwd);
+      } finally {
+        sessionAllowedWritePaths.pop();
+      }
+      return;
+    }
     await reinitializeSandbox(cwd);
-    if (choice === "once") sessionAllowedWritePaths.pop();
   }
 
   /** Truncate a command string for display, keeping maxLen chars. */
@@ -942,7 +978,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`🔓 Sandbox disabled: "${displayCmd}" (${level} config)`, "warning");
         auditLog({
           timestamp: new Date().toISOString(),
-          command: command.trimStart().split(/\s+/).join(" "),
+          command: normalizeCmd(command),
           type: "predictive",
           choice: level,
           unsandboxed: true,
@@ -1008,14 +1044,14 @@ export default function (pi: ExtensionAPI) {
             );
             auditLog({
               timestamp: new Date().toISOString(),
-              command: command.trimStart().split(/\s+/).join(" "),
+              command: normalizeCmd(command),
               type: "reactive",
               choice: "declined",
               unsandboxed: false,
             });
           } else {
             const displayCmd = truncateCmd(command);
-            const normalized = command.trimStart().split(/\s+/).join(" ");
+            const normalized = normalizeCmd(command);
 
             if (choice === "session") {
               if (normalized && !sessionUnsandboxedCommands.includes(normalized)) {
@@ -1027,14 +1063,7 @@ export default function (pi: ExtensionAPI) {
               addUnsandboxedCommandToConfig(getConfigPaths(ctx.cwd).globalPath, command);
             }
 
-            const bypassLabel =
-              choice === "once"
-                ? "once"
-                : choice === "session"
-                  ? "session"
-                  : choice === "project"
-                    ? "project"
-                    : "global";
+            const bypassLabel = actionLabel(choice);
 
             ctx.ui.notify(
               `🔓 Retried without sandbox: "${displayCmd}" (exact match, ${bypassLabel})`,
@@ -1072,14 +1101,7 @@ export default function (pi: ExtensionAPI) {
           const choice = await promptWriteBlock(ctx, blockedPath);
           if (choice !== "abort") {
             await applyWriteChoice(choice, blockedPath, ctx.cwd);
-            const level =
-              choice === "once"
-                ? "once"
-                : choice === "session"
-                  ? "session"
-                  : choice === "project"
-                    ? "project"
-                    : "global";
+            const level = actionLabel(choice);
             ctx.ui.notify(`📝 Write path "${blockedPath}" allowed (${level})`, "info");
             pi.sendMessage(
               {
@@ -1093,7 +1115,7 @@ export default function (pi: ExtensionAPI) {
               timestamp: new Date().toISOString(),
               command: blockedPath,
               type: "predictive",
-              choice: level,
+              choice,
               unsandboxed: false,
             });
 
@@ -1148,14 +1170,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
         await applyDomainChoice(choice, domain, ctx.cwd);
-        const level =
-          choice === "once"
-            ? "once"
-            : choice === "session"
-              ? "session"
-              : choice === "project"
-                ? "project"
-                : "global";
+        const level = actionLabel(choice);
         ctx.ui.notify(`🌐 Domain "${domain}" allowed (${level})`, "info");
         pi.sendMessage(
           {
@@ -1169,7 +1184,7 @@ export default function (pi: ExtensionAPI) {
           timestamp: new Date().toISOString(),
           command: domain,
           type: "predictive",
-          choice: level,
+          choice,
           unsandboxed: false,
         });
       }
@@ -1183,7 +1198,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(`🔓 Sandbox disabled: "${displayCmd}" (${level} config)`, "warning");
       auditLog({
         timestamp: new Date().toISOString(),
-        command: event.command.trimStart().split(/\s+/).join(" "),
+        command: normalizeCmd(event.command),
         type: "predictive",
         choice: level,
         unsandboxed: true,
@@ -1243,13 +1258,13 @@ export default function (pi: ExtensionAPI) {
         );
         auditLog({
           timestamp: new Date().toISOString(),
-          command: event.command.trimStart().split(/\s+/).join(" "),
+          command: normalizeCmd(event.command),
           type: "reactive",
           choice: "declined",
           unsandboxed: false,
         });
       } else {
-        const normalized = event.command.trimStart().split(/\s+/).join(" ");
+        const normalized = normalizeCmd(event.command);
         if (
           choice === "session" &&
           normalized &&
@@ -1262,14 +1277,7 @@ export default function (pi: ExtensionAPI) {
           addUnsandboxedCommandToConfig(getConfigPaths(ctx.cwd).globalPath, event.command);
         }
 
-        const bypassLabel =
-          choice === "once"
-            ? "once"
-            : choice === "session"
-              ? "session"
-              : choice === "project"
-                ? "project"
-                : "global";
+        const bypassLabel = actionLabel(choice);
         const displayCmd = truncateCmd(event.command);
 
         ctx.ui.notify(
@@ -1347,14 +1355,7 @@ export default function (pi: ExtensionAPI) {
             };
           }
           await applyDomainChoice(choice, domain, ctx.cwd);
-          const level =
-            choice === "once"
-              ? "once"
-              : choice === "session"
-                ? "session"
-                : choice === "project"
-                  ? "project"
-                  : "global";
+          const level = actionLabel(choice);
           ctx.ui.notify(`🌐 Domain "${domain}" allowed (${level})`, "info");
           pi.sendMessage(
             {
@@ -1368,7 +1369,7 @@ export default function (pi: ExtensionAPI) {
             timestamp: new Date().toISOString(),
             command: domain,
             type: "predictive",
-            choice: level,
+            choice,
             unsandboxed: false,
           });
         }
@@ -1394,14 +1395,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
         await applyReadChoice(choice, filePath, ctx.cwd);
-        const level =
-          choice === "once"
-            ? "once"
-            : choice === "session"
-              ? "session"
-              : choice === "project"
-                ? "project"
-                : "global";
+        const level = actionLabel(choice);
         ctx.ui.notify(`📖 Read path "${filePath}" allowed (${level})`, "info");
         pi.sendMessage(
           {
@@ -1415,7 +1409,7 @@ export default function (pi: ExtensionAPI) {
           timestamp: new Date().toISOString(),
           command: filePath,
           type: "predictive",
-          choice: level,
+          choice,
           unsandboxed: false,
         });
         // Allowed — fall through, tool runs.
@@ -1438,14 +1432,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
         await applyWriteChoice(choice, path, ctx.cwd);
-        const level =
-          choice === "once"
-            ? "once"
-            : choice === "session"
-              ? "session"
-              : choice === "project"
-                ? "project"
-                : "global";
+        const level = actionLabel(choice);
         ctx.ui.notify(`📝 Write path "${path}" allowed (${level})`, "info");
         pi.sendMessage(
           {
@@ -1459,7 +1446,7 @@ export default function (pi: ExtensionAPI) {
           timestamp: new Date().toISOString(),
           command: path,
           type: "predictive",
-          choice: level,
+          choice,
           unsandboxed: false,
         });
 
@@ -1494,7 +1481,8 @@ export default function (pi: ExtensionAPI) {
   // ── session persistence ─────────────────────────────────────────────────────
 
   async function restoreSessionState(ctx: ExtensionContext): Promise<void> {
-    for (const entry of ctx.sessionManager.getEntries()) {
+    try {
+      for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "sandbox-session") {
         const data = entry.data as {
           sessionAllowedDomains?: string[];
@@ -1520,6 +1508,9 @@ export default function (pi: ExtensionAPI) {
         }
       }
     }
+    } catch {
+      // Silently ignore restoration errors — sandbox init proceeds without session state
+    }
   }
 
   async function persistSessionState(): Promise<void> {
@@ -1529,12 +1520,16 @@ export default function (pi: ExtensionAPI) {
       sessionAllowedWritePaths.length > 0 ||
       sessionUnsandboxedCommands.length > 0
     ) {
-      await pi.appendEntry("sandbox-session", {
-        sessionAllowedDomains: [...sessionAllowedDomains],
-        sessionAllowedReadPaths: [...sessionAllowedReadPaths],
-        sessionAllowedWritePaths: [...sessionAllowedWritePaths],
-        sessionUnsandboxedCommands: [...sessionUnsandboxedCommands],
-      });
+      try {
+        await pi.appendEntry("sandbox-session", {
+          sessionAllowedDomains: [...sessionAllowedDomains],
+          sessionAllowedReadPaths: [...sessionAllowedReadPaths],
+          sessionAllowedWritePaths: [...sessionAllowedWritePaths],
+          sessionUnsandboxedCommands: [...sessionUnsandboxedCommands],
+        });
+      } catch {
+        // If saving fails, don't clear — allowances survive the current session
+      }
     }
     sessionAllowedDomains.length = 0;
     sessionAllowedReadPaths.length = 0;
@@ -1802,7 +1797,7 @@ export default function (pi: ExtensionAPI) {
       ];
 
       const testCmd = 'security find-generic-password -s "test" 2>&1 | head -3';
-      const normalized = testCmd.trimStart().split(/\s+/).join(" ");
+      const normalized = normalizeCmd(testCmd);
       const patterns = getEffectiveUnsandboxedCommands(ctx.cwd);
       lines.push(`  test command: ${testCmd}`);
       lines.push(`  normalized: ${normalized}`);
