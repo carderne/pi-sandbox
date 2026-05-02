@@ -1047,25 +1047,11 @@ export default function (pi: ExtensionAPI) {
       ) {
         const displayCmd = truncateCmd(command);
         const level = getUnsandboxedCommandLevel(command, ctx.cwd, sessionUnsandboxedCommands);
-        ctx.ui.notify(`🔓 Sandbox disabled: "${displayCmd}" (${level} config)`, "warning");
-        auditLog({
-          timestamp: new Date().toISOString(),
-          command: normalizeCmd(command),
-          type: "predictive",
+        recordDecisionAndNotify(ctx, {
+          action: "bypass-predictive",
+          target: displayCmd,
           choice: level,
-          unsandboxed: true,
         });
-        pi.sendMessage(
-          {
-            customType: "sandbox-bypass",
-            content: `User pre-configured unsandboxed execution of exact command "${displayCmd}" (${level})`,
-            display: false,
-          },
-          {
-            deliverAs: "steer",
-            triggerTurn: false,
-          },
-        );
         result = await runUnsandboxed();
       } else if (!sandboxEnabled || !sandboxInitialized) {
         result = await runUnsandboxed();
@@ -1102,24 +1088,10 @@ export default function (pi: ExtensionAPI) {
 
           if (choice === "abort") {
             const displayCmd = truncateCmd(command);
-            ctx.ui.notify(`🛡️  Kept sandboxed: "${displayCmd}"`, "info");
-            pi.sendMessage(
-              {
-                customType: "sandbox-bypass",
-                content: `User declined unsandboxed retry of "${displayCmd}"`,
-                display: false,
-              },
-              {
-                deliverAs: "steer",
-                triggerTurn: false,
-              },
-            );
-            auditLog({
-              timestamp: new Date().toISOString(),
-              command: normalizeCmd(command),
-              type: "reactive",
+            recordDecisionAndNotify(ctx, {
+              action: "bypass-declined",
+              target: displayCmd,
               choice: "declined",
-              unsandboxed: false,
             });
           } else {
             const displayCmd = truncateCmd(command);
@@ -1137,28 +1109,10 @@ export default function (pi: ExtensionAPI) {
 
             const bypassLabel = actionLabel(choice);
 
-            ctx.ui.notify(
-              `🔓 Retried without sandbox: "${displayCmd}" (exact match, ${bypassLabel})`,
-              "warning",
-            );
-
-            pi.sendMessage(
-              {
-                customType: "sandbox-bypass",
-                content: `User retried "${displayCmd}" without sandbox (exact match, ${bypassLabel})`,
-                display: false,
-              },
-              {
-                deliverAs: "steer",
-                triggerTurn: false,
-              },
-            );
-            auditLog({
-              timestamp: new Date().toISOString(),
-              command: normalized,
-              type: "reactive",
-              choice: choice,
-              unsandboxed: true,
+            recordDecisionAndNotify(ctx, {
+              action: "bypass-retry",
+              target: displayCmd,
+              choice: bypassLabel,
             });
 
             result = await runUnsandboxed();
@@ -1174,21 +1128,10 @@ export default function (pi: ExtensionAPI) {
           if (choice !== "abort") {
             await applyWriteChoice(choice, blockedPath, ctx.cwd);
             const level = actionLabel(choice);
-            ctx.ui.notify(`📝 Write path "${blockedPath}" allowed (${level})`, "info");
-            pi.sendMessage(
-              {
-                customType: "sandbox-permission",
-                content: `User allowed write path "${blockedPath}" (${level})`,
-                display: false,
-              },
-              { deliverAs: "steer", triggerTurn: false },
-            );
-            auditLog({
-              timestamp: new Date().toISOString(),
-              command: blockedPath,
-              type: "predictive",
-              choice,
-              unsandboxed: false,
+            recordDecisionAndNotify(ctx, {
+              action: "write-allowed",
+              target: blockedPath,
+              choice: level,
             });
 
             const config = loadConfig(ctx.cwd);
@@ -1243,21 +1186,10 @@ export default function (pi: ExtensionAPI) {
         }
         await applyDomainChoice(choice, domain, ctx.cwd);
         const level = actionLabel(choice);
-        ctx.ui.notify(`🌐 Domain "${domain}" allowed (${level})`, "info");
-        pi.sendMessage(
-          {
-            customType: "sandbox-permission",
-            content: `User allowed domain "${domain}" (${level})`,
-            display: false,
-          },
-          { deliverAs: "steer", triggerTurn: false },
-        );
-        auditLog({
-          timestamp: new Date().toISOString(),
-          command: domain,
-          type: "predictive",
-          choice,
-          unsandboxed: false,
+        recordDecisionAndNotify(ctx, {
+          action: "domain-allowed",
+          target: domain,
+          choice: level,
         });
       }
     }
@@ -1267,25 +1199,11 @@ export default function (pi: ExtensionAPI) {
     if (commandIsUnsandboxed(event.command, unsandboxedPatterns)) {
       const displayCmd = truncateCmd(event.command);
       const level = getUnsandboxedCommandLevel(event.command, ctx.cwd, sessionUnsandboxedCommands);
-      ctx.ui.notify(`🔓 Sandbox disabled: "${displayCmd}" (${level} config)`, "warning");
-      auditLog({
-        timestamp: new Date().toISOString(),
-        command: normalizeCmd(event.command),
-        type: "predictive",
+      recordDecisionAndNotify(ctx, {
+        action: "bypass-predictive",
+        target: displayCmd,
         choice: level,
-        unsandboxed: true,
       });
-      pi.sendMessage(
-        {
-          customType: "sandbox-bypass",
-          content: `User pre-configured unsandboxed execution of exact command "${displayCmd}" (${level})`,
-          display: false,
-        },
-        {
-          deliverAs: "steer",
-          triggerTurn: false,
-        },
-      );
       return; // Let default (unsandboxed) bash run
     }
 
@@ -1316,24 +1234,10 @@ export default function (pi: ExtensionAPI) {
 
       if (choice === "abort") {
         const displayCmd = truncateCmd(event.command);
-        ctx.ui.notify(`🛡️  Kept sandboxed: "${displayCmd}"`, "info");
-        pi.sendMessage(
-          {
-            customType: "sandbox-bypass",
-            content: `User declined unsandboxed retry of "${displayCmd}"`,
-            display: false,
-          },
-          {
-            deliverAs: "steer",
-            triggerTurn: false,
-          },
-        );
-        auditLog({
-          timestamp: new Date().toISOString(),
-          command: normalizeCmd(event.command),
-          type: "reactive",
+        recordDecisionAndNotify(ctx, {
+          action: "bypass-declined",
+          target: displayCmd,
           choice: "declined",
-          unsandboxed: false,
         });
       } else {
         const normalized = normalizeCmd(event.command);
@@ -1352,28 +1256,10 @@ export default function (pi: ExtensionAPI) {
         const bypassLabel = actionLabel(choice);
         const displayCmd = truncateCmd(event.command);
 
-        ctx.ui.notify(
-          `🔓 Retried without sandbox: "${displayCmd}" (exact match, ${bypassLabel})`,
-          "warning",
-        );
-
-        pi.sendMessage(
-          {
-            customType: "sandbox-bypass",
-            content: `User retried "${displayCmd}" without sandbox (exact match, ${bypassLabel})`,
-            display: false,
-          },
-          {
-            deliverAs: "steer",
-            triggerTurn: false,
-          },
-        );
-        auditLog({
-          timestamp: new Date().toISOString(),
-          command: normalized,
-          type: "reactive",
-          choice: choice,
-          unsandboxed: true,
+        recordDecisionAndNotify(ctx, {
+          action: "bypass-retry",
+          target: displayCmd,
+          choice: bypassLabel,
         });
 
         // Rerun unsandboxed
@@ -1428,21 +1314,10 @@ export default function (pi: ExtensionAPI) {
           }
           await applyDomainChoice(choice, domain, ctx.cwd);
           const level = actionLabel(choice);
-          ctx.ui.notify(`🌐 Domain "${domain}" allowed (${level})`, "info");
-          pi.sendMessage(
-            {
-              customType: "sandbox-permission",
-              content: `User allowed domain "${domain}" (${level})`,
-              display: false,
-            },
-            { deliverAs: "steer", triggerTurn: false },
-          );
-          auditLog({
-            timestamp: new Date().toISOString(),
-            command: domain,
-            type: "predictive",
-            choice,
-            unsandboxed: false,
+          recordDecisionAndNotify(ctx, {
+            action: "domain-allowed",
+            target: domain,
+            choice: level,
           });
         }
       }
@@ -1468,21 +1343,10 @@ export default function (pi: ExtensionAPI) {
         }
         await applyReadChoice(choice, filePath, ctx.cwd);
         const level = actionLabel(choice);
-        ctx.ui.notify(`📖 Read path "${filePath}" allowed (${level})`, "info");
-        pi.sendMessage(
-          {
-            customType: "sandbox-permission",
-            content: `User allowed read path "${filePath}" (${level})`,
-            display: false,
-          },
-          { deliverAs: "steer", triggerTurn: false },
-        );
-        auditLog({
-          timestamp: new Date().toISOString(),
-          command: filePath,
-          type: "predictive",
-          choice,
-          unsandboxed: false,
+        recordDecisionAndNotify(ctx, {
+          action: "read-allowed",
+          target: filePath,
+          choice: level,
         });
         // Allowed — fall through, tool runs.
         return;
@@ -1505,21 +1369,10 @@ export default function (pi: ExtensionAPI) {
         }
         await applyWriteChoice(choice, path, ctx.cwd);
         const level = actionLabel(choice);
-        ctx.ui.notify(`📝 Write path "${path}" allowed (${level})`, "info");
-        pi.sendMessage(
-          {
-            customType: "sandbox-permission",
-            content: `User allowed write path "${path}" (${level})`,
-            display: false,
-          },
-          { deliverAs: "steer", triggerTurn: false },
-        );
-        auditLog({
-          timestamp: new Date().toISOString(),
-          command: path,
-          type: "predictive",
-          choice,
-          unsandboxed: false,
+        recordDecisionAndNotify(ctx, {
+          action: "write-allowed",
+          target: path,
+          choice: level,
         });
 
         // denyWrite takes precedence — warn if it would still block.
