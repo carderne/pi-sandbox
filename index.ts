@@ -152,6 +152,7 @@ function auditLog(entry: {
 
 /**
  * Determine the config level for an unsandboxed command.
+ * Determine the config level for an unsandboxed command.
  * Returns "project-config", "global-config", or "session" based on which config
  * contains the command. "-config" suffix means no user interaction occurred.
  */
@@ -624,6 +625,70 @@ export default function (pi: ExtensionAPI) {
   // ── UI prompts ──────────────────────────────────────────────────────────────
 
   type Action = "abort" | "session" | "project" | "global" | "once" | "project-config" | "global-config";
+
+  // ── Record decision + notify user + agent ───────────────────────────────────
+
+  function recordDecisionAndNotify(
+    ctx: ExtensionContext,
+    decision: {
+      action: "bypass-predictive" | "bypass-retry" | "bypass-declined" | "domain-allowed" | "read-allowed" | "write-allowed";
+      target: string;
+      choice: string;
+    },
+  ): void {
+    const { action, target, choice } = decision;
+
+    const auditType: "predictive" | "reactive" =
+      action === "bypass-predictive" ? "predictive" : "reactive";
+    const unsandboxed =
+      action === "bypass-predictive" || action === "bypass-retry";
+
+    auditLog({
+      timestamp: new Date().toISOString(),
+      command: target,
+      type: auditType,
+      choice: choice as any,
+      unsandboxed,
+    });
+
+    let notifyMsg: string;
+    let sendMsg: string;
+    let level: "info" | "warning" = "info";
+
+    switch (action) {
+      case "bypass-predictive":
+        notifyMsg = `🔓 Sandbox disabled: "${target}" (${choice})`;
+        sendMsg = `User pre-configured unsandboxed execution of exact command "${target}" (${choice})`;
+        level = "warning";
+        break;
+      case "bypass-retry":
+        notifyMsg = `🔓 Retried without sandbox: "${target}" (exact match, ${choice})`;
+        sendMsg = `User retried "${target}" without sandbox (exact match, ${choice})`;
+        break;
+      case "bypass-declined":
+        notifyMsg = `🛡️  Kept sandboxed: "${target}"`;
+        sendMsg = `User declined unsandboxed retry of "${target}"`;
+        break;
+      case "domain-allowed":
+        notifyMsg = `🌐 Domain "${target}" allowed (${choice})`;
+        sendMsg = `User allowed domain "${target}" (${choice})`;
+        break;
+      case "read-allowed":
+        notifyMsg = `📖 Read path "${target}" allowed (${choice})`;
+        sendMsg = `User allowed read path "${target}" (${choice})`;
+        break;
+      case "write-allowed":
+        notifyMsg = `📝 Write path "${target}" allowed (${choice})`;
+        sendMsg = `User allowed write path "${target}" (${choice})`;
+        break;
+    }
+
+    ctx.ui.notify(notifyMsg, level);
+    pi.sendMessage(
+      { customType: "sandbox-decision", content: sendMsg, display: false },
+      { deliverAs: "steer", triggerTurn: false },
+    );
+  }
 
   interface PromptOption {
     label: string;
