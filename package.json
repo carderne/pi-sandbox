@@ -36,7 +36,7 @@
     "ci:check": "npm run check"
   },
   "dependencies": {
-    "@carderne/sandbox-runtime": "^0.0.43"
+    "@carderne/sandbox-runtime": "github:cad0p/sandbox-runtime#16c2d2e"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "^0.61.0"
