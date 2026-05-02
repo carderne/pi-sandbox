@@ -1495,10 +1495,9 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ── session_start — restore persisted state, then init sandbox ────────────
+  // ── session persistence ─────────────────────────────────────────────────────
 
-  pi.on("session_start", async (_event, ctx) => {
-    // Restore session allowances from previous execution (survives reload)
+  async function restoreSessionState(ctx: ExtensionContext): Promise<void> {
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "sandbox-session") {
         const data = entry.data as {
@@ -1525,6 +1524,32 @@ export default function (pi: ExtensionAPI) {
         }
       }
     }
+  }
+
+  async function persistSessionState(): Promise<void> {
+    if (
+      sessionAllowedDomains.length > 0 ||
+      sessionAllowedReadPaths.length > 0 ||
+      sessionAllowedWritePaths.length > 0 ||
+      sessionUnsandboxedCommands.length > 0
+    ) {
+      await pi.appendEntry("sandbox-session", {
+        sessionAllowedDomains: [...sessionAllowedDomains],
+        sessionAllowedReadPaths: [...sessionAllowedReadPaths],
+        sessionAllowedWritePaths: [...sessionAllowedWritePaths],
+        sessionUnsandboxedCommands: [...sessionUnsandboxedCommands],
+      });
+    }
+    sessionAllowedDomains.length = 0;
+    sessionAllowedReadPaths.length = 0;
+    sessionAllowedWritePaths.length = 0;
+    sessionUnsandboxedCommands.length = 0;
+  }
+
+  // ── session_start — restore persisted state, then init sandbox ────────────
+
+  pi.on("session_start", async (_event, ctx) => {
+    await restoreSessionState(ctx);
 
     const noSandbox = pi.getFlag("no-sandbox") as boolean;
 
@@ -1604,24 +1629,7 @@ export default function (pi: ExtensionAPI) {
   // ── session_shutdown — persist + cleanup ────────────────────────────────────
 
   pi.on("session_shutdown", async () => {
-    // Save session allowances so they survive reload
-    if (
-      sessionAllowedDomains.length > 0 ||
-      sessionAllowedReadPaths.length > 0 ||
-      sessionAllowedWritePaths.length > 0 ||
-      sessionUnsandboxedCommands.length > 0
-    ) {
-      await pi.appendEntry("sandbox-session", {
-        sessionAllowedDomains: [...sessionAllowedDomains],
-        sessionAllowedReadPaths: [...sessionAllowedReadPaths],
-        sessionAllowedWritePaths: [...sessionAllowedWritePaths],
-        sessionUnsandboxedCommands: [...sessionUnsandboxedCommands],
-      });
-    }
-    sessionAllowedDomains.length = 0;
-    sessionAllowedReadPaths.length = 0;
-    sessionAllowedWritePaths.length = 0;
-    sessionUnsandboxedCommands.length = 0;
+    await persistSessionState();
     if (sandboxInitialized) {
       try {
         await SandboxManager.reset();
@@ -1771,7 +1779,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("sandbox-debug", {
-    description: "Debug sandbox config loading",
+    description:
+      "Debug sandbox config loading. Use when confused about permissions, " +
+      "why a path/domain is blocked, or why an action is denied without apparent reason.",
     handler: async (_args, ctx) => {
       const config = loadConfig(ctx.cwd);
       const { globalPath, projectPath } = getConfigPaths(ctx.cwd);
