@@ -91,6 +91,7 @@ interface SandboxConfig extends SandboxRuntimeConfig {
    * Commands that always run unsandboxed (e.g. ["gh auth token"]).
    * Matched by exact full command string. Persists via config file.
    * Override via "unsandboxedCommands" key in sandbox.json.
+   * Global and project configs are merged additively (set union).
    */
   unsandboxedCommands?: string[];
   /**
@@ -644,7 +645,6 @@ export default function (pi: ExtensionAPI) {
     return [
       { label: labels.once, key: "o", action: "once" },
       { label: labels.session, key: "s", action: "session" },
-      { label: labels.abort, key: "esc", action: "abort" },
       {
         label: labels.project,
         key: "P",
@@ -659,6 +659,7 @@ export default function (pi: ExtensionAPI) {
         confirm: true,
         hint: "→ ~/.pi/agent/sandbox.json",
       },
+      { label: labels.abort, key: "esc", action: "abort" },
     ];
   }
 
