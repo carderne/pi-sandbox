@@ -169,7 +169,11 @@ function getUnsandboxedCommandLevel(
   if (existsSync(projectConfigPath)) {
     try {
       const projectConfig = JSON.parse(readFileSync(projectConfigPath, "utf-8"));
-      if ((projectConfig.unsandboxedCommands as string[] | undefined)?.map(normalizeCmd).includes(normalized)) {
+      if (
+        (projectConfig.unsandboxedCommands as string[] | undefined)
+          ?.map(normalizeCmd)
+          .includes(normalized)
+      ) {
         return "project-config";
       }
     } catch {
@@ -182,7 +186,11 @@ function getUnsandboxedCommandLevel(
   if (existsSync(globalConfigPath)) {
     try {
       const globalConfig = JSON.parse(readFileSync(globalConfigPath, "utf-8"));
-      if ((globalConfig.unsandboxedCommands as string[] | undefined)?.map(normalizeCmd).includes(normalized)) {
+      if (
+        (globalConfig.unsandboxedCommands as string[] | undefined)
+          ?.map(normalizeCmd)
+          .includes(normalized)
+      ) {
         return "global-config";
       }
     } catch {
@@ -356,9 +364,24 @@ function extractBlockedWritePath(output: string): string | null {
 // ── Action label helper ───────────────────────────────────────────────────────
 
 /** Convert an Action enum to a human-readable label. */
-function actionLabel(action: "abort" | "session" | "project" | "global" | "once" | "project-config" | "global-config" | "declined"): string {
-  return action === "once" ? "once" : action === "session" ? "session"
-    : action === "project" ? "project" : "global";
+function actionLabel(
+  action:
+    | "abort"
+    | "session"
+    | "project"
+    | "global"
+    | "once"
+    | "project-config"
+    | "global-config"
+    | "declined",
+): string {
+  return action === "once"
+    ? "once"
+    : action === "session"
+      ? "session"
+      : action === "project"
+        ? "project"
+        : "global";
 }
 
 // ── Command normalization ─────────────────────────────────────────────────────
@@ -623,14 +646,30 @@ export default function (pi: ExtensionAPI) {
 
   // ── UI prompts ──────────────────────────────────────────────────────────────
 
-  type Action = "abort" | "session" | "project" | "global" | "once" | "project-config" | "global-config";
+  type Action =
+    | "abort"
+    | "session"
+    | "project"
+    | "global"
+    | "once"
+    | "project-config"
+    | "global-config";
 
   // ── Record decision + notify user + agent ───────────────────────────────────
 
   function recordDecisionAndNotify(
     ctx: ExtensionContext,
     decision: {
-      action: "bypass-predictive" | "bypass-retry" | "bypass-declined" | "domain-allowed" | "read-allowed" | "write-allowed" | "domain-denied" | "read-denied" | "write-denied";
+      action:
+        | "bypass-predictive"
+        | "bypass-retry"
+        | "bypass-declined"
+        | "domain-allowed"
+        | "read-allowed"
+        | "write-allowed"
+        | "domain-denied"
+        | "read-denied"
+        | "write-denied";
       target: string;
       choice: string;
     },
@@ -639,8 +678,7 @@ export default function (pi: ExtensionAPI) {
 
     const auditType: "predictive" | "reactive" =
       action === "bypass-predictive" ? "predictive" : "reactive";
-    const unsandboxed =
-      action === "bypass-predictive" || action === "bypass-retry";
+    const unsandboxed = action === "bypass-predictive" || action === "bypass-retry";
 
     auditLog({
       timestamp: new Date().toISOString(),
@@ -774,130 +812,125 @@ export default function (pi: ExtensionAPI) {
   ): Promise<Action> {
     if (!ctx.hasUI) return "abort";
 
-    const result = await ctx.ui.custom<Action>(
-      (tui, theme, _kb, done) => {
-        let selectedIndex = 0;
-        let pendingAction: Action | null = null;
-        let renderedAt = 0;
-        const DEBOUNCE_MS = 400;
+    const result = await ctx.ui.custom<Action>((tui, theme, _kb, done) => {
+      let selectedIndex = 0;
+      let pendingAction: Action | null = null;
+      let renderedAt = 0;
+      const DEBOUNCE_MS = 400;
 
-        function resolve(action: Action) {
-          done(action);
-        }
+      function resolve(action: Action) {
+        done(action);
+      }
 
-        return {
-          render(width: number): string[] {
-            if (renderedAt === 0) renderedAt = Date.now();
-            const lines: string[] = [];
-            lines.push(truncateToWidth(theme.fg("warning", title), width));
-            lines.push("");
+      return {
+        render(width: number): string[] {
+          if (renderedAt === 0) renderedAt = Date.now();
+          const lines: string[] = [];
+          lines.push(truncateToWidth(theme.fg("warning", title), width));
+          lines.push("");
 
-            for (let i = 0; i < options.length; i++) {
-              const opt = options[i];
-              const isSelected = i === selectedIndex;
-              const isPending = pendingAction === opt.action;
+          for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            const isSelected = i === selectedIndex;
+            const isPending = pendingAction === opt.action;
 
-              const prefix = isSelected ? " → " : "   ";
-              const keyHint = theme.fg("accent", `[${opt.key}]`);
-              let label = opt.label;
+            const prefix = isSelected ? " → " : "   ";
+            const keyHint = theme.fg("accent", `[${opt.key}]`);
+            let label = opt.label;
 
-              if (opt.hint) {
-                label += `  ${theme.fg("dim", opt.hint)}`;
-              }
-
-              if (isPending) {
-                label += `  ${theme.fg("warning", "→ press Enter to confirm")}`;
-              }
-
-              const line = `${prefix}${keyHint} ${label}`;
-              lines.push(truncateToWidth(line, width));
+            if (opt.hint) {
+              label += `  ${theme.fg("dim", opt.hint)}`;
             }
 
-            lines.push("");
-            const hasEsc = options.some((o) => o.key === "esc");
-            const abortKeys = hasEsc ? "esc/ctrl+c" : "q/ctrl+c";
-            const footer = pendingAction
-              ? `↑↓ navigate  enter confirm  ${abortKeys.split("/")[0]} abort`
-              : `↑↓ navigate  enter select  ${abortKeys} abort`;
-            lines.push(truncateToWidth(theme.fg("dim", footer), width));
+            if (isPending) {
+              label += `  ${theme.fg("warning", "→ press Enter to confirm")}`;
+            }
 
-            return lines;
-          },
+            const line = `${prefix}${keyHint} ${label}`;
+            lines.push(truncateToWidth(line, width));
+          }
 
-          handleInput(data: string): void {
-            // NOTE: pi routes ALL keyboard input to this component when focused.
-            // App-level keys like Ctrl+O (expand) are NOT processed. Workaround:
-            // esc to dismiss, expand tool output, then re-trigger the prompt.
+          lines.push("");
+          const hasEsc = options.some((o) => o.key === "esc");
+          const abortKeys = hasEsc ? "esc/ctrl+c" : "q/ctrl+c";
+          const footer = pendingAction
+            ? `↑↓ navigate  enter confirm  ${abortKeys.split("/")[0]} abort`
+            : `↑↓ navigate  enter select  ${abortKeys} abort`;
+          lines.push(truncateToWidth(theme.fg("dim", footer), width));
 
-            // Debounce: ignore single-key presses for DEBOUNCE_MS after prompt appears.
-            // Prevents accidental selection when user is typing in chat text box.
-            // Navigation keys (arrows, enter, escape) are always allowed.
-            if (Date.now() - renderedAt < DEBOUNCE_MS && !isNavigationKey(data)) {
+          return lines;
+        },
+
+        handleInput(data: string): void {
+          // NOTE: pi routes ALL keyboard input to this component when focused.
+          // App-level keys like Ctrl+O (expand) are NOT processed. Workaround:
+          // esc to dismiss, expand tool output, then re-trigger the prompt.
+
+          // Debounce: ignore single-key presses for DEBOUNCE_MS after prompt appears.
+          // Prevents accidental selection when user is typing in chat text box.
+          // Navigation keys (arrows, enter, escape) are always allowed.
+          if (Date.now() - renderedAt < DEBOUNCE_MS && !isNavigationKey(data)) {
+            return;
+          }
+
+          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+            resolve("abort");
+            return;
+          }
+
+          if (matchesKey(data, Key.enter)) {
+            if (pendingAction) {
+              resolve(pendingAction);
+            } else {
+              resolve(options[selectedIndex]?.action ?? "abort");
+            }
+            return;
+          }
+
+          if (matchesKey(data, Key.up)) {
+            selectedIndex = Math.max(0, selectedIndex - 1);
+            pendingAction = null;
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, Key.down)) {
+            selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
+            pendingAction = null;
+            tui.requestRender();
+            return;
+          }
+
+          for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            if (data === opt.key) {
+              // Exact case match → immediate
+              resolve(opt.action);
               return;
             }
-
-            if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-              resolve("abort");
-              return;
-            }
-
-            if (matchesKey(data, Key.enter)) {
-              if (pendingAction) {
-                resolve(pendingAction);
+            if (data.toLowerCase() === opt.key.toLowerCase()) {
+              // Lowercase match → confirmation required for P/A
+              if (opt.confirm) {
+                pendingAction = opt.action;
+                selectedIndex = i;
               } else {
-                resolve(options[selectedIndex]?.action ?? "abort");
-              }
-              return;
-            }
-
-            if (matchesKey(data, Key.up)) {
-              selectedIndex = Math.max(0, selectedIndex - 1);
-              pendingAction = null;
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.down)) {
-              selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
-              pendingAction = null;
-              tui.requestRender();
-              return;
-            }
-
-            for (let i = 0; i < options.length; i++) {
-              const opt = options[i];
-              if (data === opt.key) {
-                // Exact case match → immediate
                 resolve(opt.action);
-                return;
               }
-              if (data.toLowerCase() === opt.key.toLowerCase()) {
-                // Lowercase match → confirmation required for P/A
-                if (opt.confirm) {
-                  pendingAction = opt.action;
-                  selectedIndex = i;
-                } else {
-                  resolve(opt.action);
-                }
-                tui.requestRender();
-                return;
-              }
+              tui.requestRender();
+              return;
             }
-          },
+          }
+        },
 
-          invalidate(): void {
-            // no-op
-          },
-        };
-      },
-    );
+        invalidate(): void {
+          // no-op
+        },
+      };
+    });
 
     return result ?? "abort";
   }
 
-  async function promptDomainBlock(
-    ctx: ExtensionContext,
-    domain: string,
-  ): Promise<Action> {
+  async function promptDomainBlock(ctx: ExtensionContext, domain: string): Promise<Action> {
     return showPermissionPrompt(
       ctx,
       `🌐 Network blocked: "${domain}" is not in allowedDomains`,
@@ -905,10 +938,7 @@ export default function (pi: ExtensionAPI) {
     ) as Promise<Action>;
   }
 
-  async function promptReadBlock(
-    ctx: ExtensionContext,
-    filePath: string,
-  ): Promise<Action> {
+  async function promptReadBlock(ctx: ExtensionContext, filePath: string): Promise<Action> {
     return showPermissionPrompt(
       ctx,
       `📖 Read blocked: "${filePath}" is not in allowRead`,
@@ -916,10 +946,7 @@ export default function (pi: ExtensionAPI) {
     ) as Promise<Action>;
   }
 
-  async function promptWriteBlock(
-    ctx: ExtensionContext,
-    filePath: string,
-  ): Promise<Action> {
+  async function promptWriteBlock(ctx: ExtensionContext, filePath: string): Promise<Action> {
     return showPermissionPrompt(
       ctx,
       `📝 Write blocked: "${filePath}" is not in allowWrite`,
@@ -952,11 +979,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── Apply allowance choices ─────────────────────────────────────────────────
 
-  async function applyDomainChoice(
-    choice: Action,
-    domain: string,
-    cwd: string,
-  ): Promise<void> {
+  async function applyDomainChoice(choice: Action, domain: string, cwd: string): Promise<void> {
     const { globalPath, projectPath } = getConfigPaths(cwd);
     if (choice === "session") sessionAllowedDomains.push(domain);
     if (choice === "project") addDomainToConfig(projectPath, domain);
@@ -973,11 +996,7 @@ export default function (pi: ExtensionAPI) {
     await reinitializeSandbox(cwd);
   }
 
-  async function applyReadChoice(
-    choice: Action,
-    filePath: string,
-    cwd: string,
-  ): Promise<void> {
+  async function applyReadChoice(choice: Action, filePath: string, cwd: string): Promise<void> {
     const { globalPath, projectPath } = getConfigPaths(cwd);
     if (choice === "session") sessionAllowedReadPaths.push(filePath);
     if (choice === "project") addReadPathToConfig(projectPath, filePath);
@@ -994,11 +1013,7 @@ export default function (pi: ExtensionAPI) {
     await reinitializeSandbox(cwd);
   }
 
-  async function applyWriteChoice(
-    choice: Action,
-    filePath: string,
-    cwd: string,
-  ): Promise<void> {
+  async function applyWriteChoice(choice: Action, filePath: string, cwd: string): Promise<void> {
     const { globalPath, projectPath } = getConfigPaths(cwd);
     if (choice === "session") sessionAllowedWritePaths.push(filePath);
     if (choice === "project") addWritePathToConfig(projectPath, filePath);
@@ -1440,31 +1455,31 @@ export default function (pi: ExtensionAPI) {
   async function restoreSessionState(ctx: ExtensionContext): Promise<void> {
     try {
       for (const entry of ctx.sessionManager.getEntries()) {
-      if (entry.type === "custom" && entry.customType === "sandbox-session") {
-        const data = entry.data as {
-          sessionAllowedDomains?: string[];
-          sessionAllowedReadPaths?: string[];
-          sessionAllowedWritePaths?: string[];
-          sessionUnsandboxedCommands?: string[];
-        };
-        if (data.sessionAllowedDomains) {
-          sessionAllowedDomains.length = 0;
-          sessionAllowedDomains.push(...data.sessionAllowedDomains);
-        }
-        if (data.sessionAllowedReadPaths) {
-          sessionAllowedReadPaths.length = 0;
-          sessionAllowedReadPaths.push(...data.sessionAllowedReadPaths);
-        }
-        if (data.sessionAllowedWritePaths) {
-          sessionAllowedWritePaths.length = 0;
-          sessionAllowedWritePaths.push(...data.sessionAllowedWritePaths);
-        }
-        if (data.sessionUnsandboxedCommands) {
-          sessionUnsandboxedCommands.length = 0;
-          sessionUnsandboxedCommands.push(...data.sessionUnsandboxedCommands);
+        if (entry.type === "custom" && entry.customType === "sandbox-session") {
+          const data = entry.data as {
+            sessionAllowedDomains?: string[];
+            sessionAllowedReadPaths?: string[];
+            sessionAllowedWritePaths?: string[];
+            sessionUnsandboxedCommands?: string[];
+          };
+          if (data.sessionAllowedDomains) {
+            sessionAllowedDomains.length = 0;
+            sessionAllowedDomains.push(...data.sessionAllowedDomains);
+          }
+          if (data.sessionAllowedReadPaths) {
+            sessionAllowedReadPaths.length = 0;
+            sessionAllowedReadPaths.push(...data.sessionAllowedReadPaths);
+          }
+          if (data.sessionAllowedWritePaths) {
+            sessionAllowedWritePaths.length = 0;
+            sessionAllowedWritePaths.push(...data.sessionAllowedWritePaths);
+          }
+          if (data.sessionUnsandboxedCommands) {
+            sessionUnsandboxedCommands.length = 0;
+            sessionUnsandboxedCommands.push(...data.sessionUnsandboxedCommands);
+          }
         }
       }
-    }
     } catch {
       // Silently ignore restoration errors — sandbox init proceeds without session state
     }
