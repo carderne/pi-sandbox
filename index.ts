@@ -636,9 +636,9 @@ export default function (pi: ExtensionAPI) {
   interface PromptLabels {
     once: string;
     session: string;
-    abort: string;
     project: string;
     global: string;
+    abort: string;
   }
 
   function buildPromptOptions(labels: PromptLabels): PromptOption[] {
@@ -666,17 +666,17 @@ export default function (pi: ExtensionAPI) {
   const PERMISSION_OPTIONS = buildPromptOptions({
     once: "Allow once",
     session: "Allow for this session only",
-    abort: "Abort (keep blocked)",
     project: "Allow for this project",
     global: "Allow for all projects",
+    abort: "Abort (keep blocked)",
   });
 
   const BYPASS_OPTIONS = buildPromptOptions({
     once: "Retry without sandbox (once)",
     session: "Retry without sandbox in this session",
-    abort: "Abort (keep failed result)",
     project: "Retry without sandbox for this project",
     global: "Retry without sandbox for all projects",
+    abort: "Abort (keep failed result)",
   });
 
   /** True if the key event is a navigation key (arrows, enter, escape). */
