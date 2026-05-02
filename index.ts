@@ -313,7 +313,7 @@ function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCallback 
 
 /**
  * Default patterns that indicate a sandbox/auth/keychain failure.
- * Users can override/extend these in their sandbox.json config.
+ * Override via "sandboxFailurePatterns" key in sandbox.json.
  */
 const DEFAULT_FAILURE_PATTERNS: string[] = [
   "operation not permitted",
@@ -608,10 +608,12 @@ export default function (pi: ExtensionAPI) {
 
   // ── UI prompts ──────────────────────────────────────────────────────────────
 
+  type Action = "abort" | "session" | "project" | "global" | "once" | "project-config" | "global-config";
+
   interface PromptOption {
     label: string;
     key: string;
-    action: "abort" | "session" | "project" | "global" | "once";
+    action: Action;
     confirm?: boolean;
     hint?: string;
   }
@@ -656,21 +658,32 @@ export default function (pi: ExtensionAPI) {
     },
   ];
 
+  /** True if the key event is a navigation key (arrows, enter, escape). */
+  function isNavigationKey(data: string): boolean {
+    return (
+      matchesKey(data, Key.enter) ||
+      matchesKey(data, Key.escape) ||
+      matchesKey(data, Key.ctrl("c")) ||
+      matchesKey(data, Key.up) ||
+      matchesKey(data, Key.down)
+    );
+  }
+
   async function showPermissionPrompt(
     ctx: ExtensionContext,
     title: string,
     options: PromptOption[],
-  ): Promise<"abort" | "session" | "project" | "global" | "once"> {
+  ): Promise<Action> {
     if (!ctx.hasUI) return "abort";
 
-    const result = await ctx.ui.custom<"abort" | "session" | "project" | "global" | "once">(
+    const result = await ctx.ui.custom<Action>(
       (tui, theme, _kb, done) => {
         let selectedIndex = 0;
-        let pendingAction: "abort" | "session" | "project" | "global" | "once" | null = null;
+        let pendingAction: Action | null = null;
         let renderedAt = 0;
         const DEBOUNCE_MS = 400;
 
-        function resolve(action: "abort" | "session" | "project" | "global" | "once") {
+        function resolve(action: Action) {
           done(action);
         }
 
@@ -721,14 +734,7 @@ export default function (pi: ExtensionAPI) {
             // Debounce: ignore single-key presses for DEBOUNCE_MS after prompt appears.
             // Prevents accidental selection when user is typing in chat text box.
             // Navigation keys (arrows, enter, escape) are always allowed.
-            if (
-              Date.now() - renderedAt < DEBOUNCE_MS &&
-              !matchesKey(data, Key.enter) &&
-              !matchesKey(data, Key.escape) &&
-              !matchesKey(data, Key.ctrl("c")) &&
-              !matchesKey(data, Key.up) &&
-              !matchesKey(data, Key.down)
-            ) {
+            if (Date.now() - renderedAt < DEBOUNCE_MS && !isNavigationKey(data)) {
               return;
             }
 
@@ -793,50 +799,48 @@ export default function (pi: ExtensionAPI) {
   async function promptDomainBlock(
     ctx: ExtensionContext,
     domain: string,
-  ): Promise<"abort" | "once" | "session" | "project" | "global"> {
+  ): Promise<Action> {
     return showPermissionPrompt(
       ctx,
       `🌐 Network blocked: "${domain}" is not in allowedDomains`,
       PERMISSION_OPTIONS,
-    ) as Promise<"abort" | "once" | "session" | "project" | "global">;
+    ) as Promise<Action>;
   }
 
   async function promptReadBlock(
     ctx: ExtensionContext,
     filePath: string,
-  ): Promise<"abort" | "once" | "session" | "project" | "global"> {
+  ): Promise<Action> {
     return showPermissionPrompt(
       ctx,
       `📖 Read blocked: "${filePath}" is not in allowRead`,
       PERMISSION_OPTIONS,
-    ) as Promise<"abort" | "once" | "session" | "project" | "global">;
+    ) as Promise<Action>;
   }
 
   async function promptWriteBlock(
     ctx: ExtensionContext,
     filePath: string,
-  ): Promise<"abort" | "once" | "session" | "project" | "global"> {
+  ): Promise<Action> {
     return showPermissionPrompt(
       ctx,
       `📝 Write blocked: "${filePath}" is not in allowWrite`,
       PERMISSION_OPTIONS,
-    ) as Promise<"abort" | "once" | "session" | "project" | "global">;
+    ) as Promise<Action>;
   }
 
   async function promptBypassBlock(
     ctx: ExtensionContext,
     command: string,
     errorOutput: string,
-  ): Promise<"abort" | "once" | "session" | "project" | "global"> {
+  ): Promise<Action> {
     const fullCmd = command.trimStart();
     const shortCmd = fullCmd.split(/\s+/).slice(0, 3).join(" ");
     const title =
       `🔓 Sandbox blocked "${shortCmd}${fullCmd.length > shortCmd.length ? "…" : ""}"\n` +
       `Error: ${truncateToWidth(errorOutput, 120)}\n` +
       `Retry unsandboxed?`;
-    return showPermissionPrompt(ctx, title, BYPASS_OPTIONS) as Promise<
-      "abort" | "once" | "session" | "project" | "global"
-    >;
+    return showPermissionPrompt(ctx, title, BYPASS_OPTIONS) as Promise<Action>;
   }
 
   function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxConfig): void {
@@ -851,7 +855,7 @@ export default function (pi: ExtensionAPI) {
   // ── Apply allowance choices ─────────────────────────────────────────────────
 
   async function applyDomainChoice(
-    choice: "once" | "session" | "project" | "global",
+    choice: Action,
     domain: string,
     cwd: string,
   ): Promise<void> {
@@ -866,7 +870,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function applyReadChoice(
-    choice: "once" | "session" | "project" | "global",
+    choice: Action,
     filePath: string,
     cwd: string,
   ): Promise<void> {
@@ -881,7 +885,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function applyWriteChoice(
-    choice: "once" | "session" | "project" | "global",
+    choice: Action,
     filePath: string,
     cwd: string,
   ): Promise<void> {
@@ -893,6 +897,13 @@ export default function (pi: ExtensionAPI) {
     if (choice === "once") sessionAllowedWritePaths.push(filePath);
     await reinitializeSandbox(cwd);
     if (choice === "once") sessionAllowedWritePaths.pop();
+  }
+
+  /** Truncate a command string for display, keeping maxLen chars. */
+  function truncateCmd(cmd: string, maxLen = 80): string {
+    const trimmed = cmd.trimStart();
+    if (trimmed.length <= maxLen) return trimmed;
+    return trimmed.slice(0, maxLen) + "…";
   }
 
   /**
@@ -930,10 +941,7 @@ export default function (pi: ExtensionAPI) {
         sandboxInitialized &&
         commandIsUnsandboxed(command, unsandboxedPatterns)
       ) {
-        const displayCmd =
-          command.trimStart().length > 80
-            ? command.trimStart().slice(0, 80) + "…"
-            : command.trimStart();
+        const displayCmd = truncateCmd(command);
         const level = getUnsandboxedCommandLevel(command, ctx.cwd, sessionUnsandboxedCommands);
         ctx.ui.notify(`🔓 Sandbox disabled: "${displayCmd}" (${level} config)`, "warning");
         auditLog({
@@ -989,10 +997,7 @@ export default function (pi: ExtensionAPI) {
           const choice = await promptBypassBlock(ctx, command, extractErrorSnippet(outputText));
 
           if (choice === "abort") {
-            const displayCmd =
-              command.trimStart().length > 80
-                ? command.trimStart().slice(0, 80) + "…"
-                : command.trimStart();
+            const displayCmd = truncateCmd(command);
             ctx.ui.notify(`🛡️  Kept sandboxed: "${displayCmd}"`, "info");
             pi.sendMessage(
               {
@@ -1013,10 +1018,7 @@ export default function (pi: ExtensionAPI) {
               unsandboxed: false,
             });
           } else {
-            const displayCmd =
-              command.trimStart().length > 80
-                ? command.trimStart().slice(0, 80) + "…"
-                : command.trimStart();
+            const displayCmd = truncateCmd(command);
             const normalized = command.trimStart().split(/\s+/).join(" ");
 
             if (choice === "session") {
@@ -1180,10 +1182,7 @@ export default function (pi: ExtensionAPI) {
     // Predictive bypass: user-configured unsandboxed commands
     const unsandboxedPatterns = getEffectiveUnsandboxedCommands(ctx.cwd);
     if (commandIsUnsandboxed(event.command, unsandboxedPatterns)) {
-      const displayCmd =
-        event.command.trimStart().length > 80
-          ? event.command.trimStart().slice(0, 80) + "…"
-          : event.command.trimStart();
+      const displayCmd = truncateCmd(event.command);
       const level = getUnsandboxedCommandLevel(event.command, ctx.cwd, sessionUnsandboxedCommands);
       ctx.ui.notify(`🔓 Sandbox disabled: "${displayCmd}" (${level} config)`, "warning");
       auditLog({
@@ -1233,10 +1232,7 @@ export default function (pi: ExtensionAPI) {
       const choice = await promptBypassBlock(ctx, event.command, extractErrorSnippet(output));
 
       if (choice === "abort") {
-        const displayCmd =
-          event.command.trimStart().length > 80
-            ? event.command.trimStart().slice(0, 80) + "…"
-            : event.command.trimStart();
+        const displayCmd = truncateCmd(event.command);
         ctx.ui.notify(`🛡️  Kept sandboxed: "${displayCmd}"`, "info");
         pi.sendMessage(
           {
@@ -1278,10 +1274,7 @@ export default function (pi: ExtensionAPI) {
               : choice === "project"
                 ? "project"
                 : "global";
-        const displayCmd =
-          event.command.trimStart().length > 80
-            ? event.command.trimStart().slice(0, 80) + "…"
-            : event.command.trimStart();
+        const displayCmd = truncateCmd(event.command);
 
         ctx.ui.notify(
           `🔓 Retried without sandbox: "${displayCmd}" (exact match, ${bypassLabel})`,
