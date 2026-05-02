@@ -630,7 +630,7 @@ export default function (pi: ExtensionAPI) {
   function recordDecisionAndNotify(
     ctx: ExtensionContext,
     decision: {
-      action: "bypass-predictive" | "bypass-retry" | "bypass-declined" | "domain-allowed" | "read-allowed" | "write-allowed";
+      action: "bypass-predictive" | "bypass-retry" | "bypass-declined" | "domain-allowed" | "read-allowed" | "write-allowed" | "domain-denied" | "read-denied" | "write-denied";
       target: string;
       choice: string;
     },
@@ -679,6 +679,19 @@ export default function (pi: ExtensionAPI) {
       case "write-allowed":
         notifyMsg = `📝 Write path "${target}" allowed (${choice})`;
         sendMsg = `User allowed write path "${target}" (${choice})`;
+        break;
+      case "domain-denied":
+        notifyMsg = `🚫 Domain "${target}" denied`;
+        sendMsg = `User denied network access to "${target}"`;
+        level = "warning";
+        break;
+      case "read-denied":
+        notifyMsg = `🚫 Read path "${target}" denied`;
+        sendMsg = `User denied read access to "${target}"`;
+        break;
+      case "write-denied":
+        notifyMsg = `🚫 Write path "${target}" denied`;
+        sendMsg = `User denied write access to "${target}"`;
         break;
     }
 
@@ -1174,6 +1187,11 @@ export default function (pi: ExtensionAPI) {
       if (!domainIsAllowed(domain, effectiveDomains)) {
         const choice = await promptDomainBlock(ctx, domain);
         if (choice === "abort") {
+          recordDecisionAndNotify(ctx, {
+            action: "domain-denied",
+            target: domain,
+            choice: "abort",
+          });
           return {
             result: {
               output: `Blocked: "${domain}" is not in allowedDomains. Use /sandbox to review your config.`,
@@ -1306,6 +1324,11 @@ export default function (pi: ExtensionAPI) {
         if (!domainIsAllowed(domain, effectiveDomains)) {
           const choice = await promptDomainBlock(ctx, domain);
           if (choice === "abort") {
+            recordDecisionAndNotify(ctx, {
+              action: "domain-denied",
+              target: domain,
+              choice: "abort",
+            });
             return {
               block: true,
               reason: `Network access to "${domain}" is blocked (not in allowedDomains).`,
@@ -1335,6 +1358,11 @@ export default function (pi: ExtensionAPI) {
       if (!matchesPattern(filePath, effectiveAllowRead)) {
         const choice = await promptReadBlock(ctx, filePath);
         if (choice === "abort") {
+          recordDecisionAndNotify(ctx, {
+            action: "read-denied",
+            target: filePath,
+            choice: "abort",
+          });
           return {
             block: true,
             reason: `Sandbox: read access denied for "${filePath}"`,
@@ -1361,6 +1389,11 @@ export default function (pi: ExtensionAPI) {
       if (shouldPromptForWrite(path, allowWrite, matchesPattern)) {
         const choice = await promptWriteBlock(ctx, path);
         if (choice === "abort") {
+          recordDecisionAndNotify(ctx, {
+            action: "write-denied",
+            target: path,
+            choice: "abort",
+          });
           return {
             block: true,
             reason: `Sandbox: write access denied for "${path}" (not in allowWrite)`,
