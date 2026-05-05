@@ -139,15 +139,37 @@ function loadConfig(cwd: string): SandboxConfig {
   return deepMerge(deepMerge(DEFAULT_CONFIG, globalConfig), projectConfig);
 }
 
+function mergeStringArrays(base: string[] | undefined, overrides: string[] | undefined): string[] {
+  return [...new Set([...(base ?? []), ...(overrides ?? [])])];
+}
+
 function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): SandboxConfig {
   const result: SandboxConfig = { ...base };
 
   if (overrides.enabled !== undefined) result.enabled = overrides.enabled;
   if (overrides.network) {
-    result.network = { ...base.network, ...overrides.network };
+    result.network = {
+      ...base.network,
+      ...overrides.network,
+      allowedDomains: mergeStringArrays(
+        base.network?.allowedDomains,
+        overrides.network.allowedDomains,
+      ),
+      deniedDomains: mergeStringArrays(
+        base.network?.deniedDomains,
+        overrides.network.deniedDomains,
+      ),
+    };
   }
   if (overrides.filesystem) {
-    result.filesystem = { ...base.filesystem, ...overrides.filesystem };
+    result.filesystem = {
+      ...base.filesystem,
+      ...overrides.filesystem,
+      denyRead: mergeStringArrays(base.filesystem?.denyRead, overrides.filesystem.denyRead),
+      allowRead: mergeStringArrays(base.filesystem?.allowRead, overrides.filesystem.allowRead),
+      allowWrite: mergeStringArrays(base.filesystem?.allowWrite, overrides.filesystem.allowWrite),
+      denyWrite: mergeStringArrays(base.filesystem?.denyWrite, overrides.filesystem.denyWrite),
+    };
   }
 
   const extOverrides = overrides as {
