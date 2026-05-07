@@ -84,7 +84,7 @@ import {
   isToolCallEventType,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
+import { Input, matchesKey, Key, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
@@ -488,12 +488,19 @@ export default function (pi: ExtensionAPI) {
 
   // ── UI prompts ──────────────────────────────────────────────────────────────
 
+  type PermissionAction = "abort" | "session" | "project" | "global";
+
   interface PromptOption {
     label: string;
     key: string;
-    action: "abort" | "session" | "project" | "global";
+    action: PermissionAction;
     confirm?: boolean;
     hint?: string;
+  }
+
+  interface PermissionPromptResult {
+    action: PermissionAction;
+    value: string;
   }
 
   const PERMISSION_OPTIONS: PromptOption[] = [
@@ -519,148 +526,281 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionContext,
     title: string,
     options: PromptOption[],
-  ): Promise<"abort" | "session" | "project" | "global"> {
-    if (!ctx.hasUI) return "abort";
+    originalValue: string,
+    validateValue: (value: string) => string | null,
+  ): Promise<PermissionPromptResult> {
+    if (!ctx.hasUI) return { action: "abort", value: originalValue };
 
-    const result = await ctx.ui.custom<"abort" | "session" | "project" | "global">(
-      (tui, theme, _kb, done) => {
-        let selectedIndex = 0;
-        let pendingAction: "abort" | "session" | "project" | "global" | null = null;
+    const result = await ctx.ui.custom<PermissionPromptResult>((tui, theme, _kb, done) => {
+      const input = new Input();
+      let selectedIndex = 0;
+      let pendingAction: PermissionAction | null = null;
+      let editing = false;
+      let componentFocused = false;
+      let error: string | null = null;
 
-        function resolve(action: "abort" | "session" | "project" | "global") {
-          done(action);
+      function selectedOption(): PromptOption {
+        return options[selectedIndex] ?? options[0]!;
+      }
+
+      function isAllowOption(opt: PromptOption): boolean {
+        return opt.action !== "abort";
+      }
+
+      function updateFocus(): void {
+        input.focused = componentFocused && editing;
+      }
+
+      function beginEditing(): void {
+        input.setValue(originalValue);
+        input.handleInput("\x05");
+        editing = true;
+        error = null;
+        pendingAction = null;
+        updateFocus();
+      }
+
+      function stopEditing(): void {
+        editing = false;
+        error = null;
+        updateFocus();
+      }
+
+      function resolve(action: PermissionAction): void {
+        if (action === "abort") {
+          done({ action, value: originalValue });
+          return;
         }
 
-        return {
-          render(width: number): string[] {
-            const lines: string[] = [];
-            lines.push(truncateToWidth(theme.fg("warning", title), width));
-            lines.push("");
+        const value = editing ? input.getValue().trim() : originalValue;
+        const validationError = validateValue(value);
+        if (validationError) {
+          error = validationError;
+          editing = true;
+          updateFocus();
+          tui.requestRender();
+          return;
+        }
 
-            for (let i = 0; i < options.length; i++) {
-              const opt = options[i];
-              const isSelected = i === selectedIndex;
-              const isPending = pendingAction === opt.action;
+        done({ action, value });
+      }
 
-              const prefix = isSelected ? " → " : "   ";
-              const keyHint = theme.fg("accent", `[${opt.key}]`);
-              let label = opt.label;
+      return {
+        get focused(): boolean {
+          return componentFocused;
+        },
 
-              if (opt.hint) {
-                label += `  ${theme.fg("dim", opt.hint)}`;
-              }
+        set focused(value: boolean) {
+          componentFocused = value;
+          updateFocus();
+        },
 
-              if (isPending) {
-                label += `  ${theme.fg("warning", "→ press Enter to confirm")}`;
-              }
+        render(width: number): string[] {
+          const lines: string[] = [];
+          lines.push(truncateToWidth(theme.fg("warning", title), width));
+          lines.push("");
 
-              const line = `${prefix}${keyHint} ${label}`;
-              lines.push(truncateToWidth(line, width));
+          for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            const isSelected = i === selectedIndex;
+            const isPending = pendingAction === opt.action;
+
+            const prefix = isSelected ? " → " : "   ";
+            const keyHint = theme.fg("accent", `[${opt.key}]`);
+            let label = opt.label;
+
+            if (editing && isSelected && isAllowOption(opt)) {
+              const inputSeparator = " ";
+              const inputWidth = Math.max(
+                1,
+                width - visibleWidth(`${prefix}${keyHint} ${label}${inputSeparator}`),
+              );
+              const renderedInput = input.render(inputWidth)[0] ?? "";
+              label += `${inputSeparator}${theme.fg("accent", renderedInput)}`;
+            } else if (opt.hint) {
+              label += `  ${theme.fg("dim", opt.hint)}`;
             }
 
-            lines.push("");
-            const footer = pendingAction
-              ? "↑↓ navigate  enter confirm  esc cancel"
-              : "↑↓ navigate  enter select  esc/ctrl+c cancel";
-            lines.push(truncateToWidth(theme.fg("dim", footer), width));
+            if (isPending) {
+              label += `  ${theme.fg("warning", "→ press Enter to confirm")}`;
+            }
 
-            return lines;
-          },
+            const line = `${prefix}${keyHint} ${label}`;
+            lines.push(truncateToWidth(line, width));
 
-          handleInput(data: string): void {
-            if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-              resolve("abort");
+            if (editing && isSelected && error) {
+              lines.push(truncateToWidth(theme.fg("error", `   ✗ ${error}`), width));
+            }
+          }
+
+          lines.push("");
+          const footer = editing
+            ? "↑↓ navigate, enter confirm, esc reset, ctrl+c cancel"
+            : pendingAction
+              ? "↑↓ navigate, tab edit, enter confirm, esc/ctrl+c cancel"
+              : "↑↓ navigate, tab edit, enter select, esc/ctrl+c cancel";
+          lines.push(truncateToWidth(theme.fg("dim", footer), width));
+
+          return lines;
+        },
+
+        handleInput(data: string): void {
+          if (matchesKey(data, Key.ctrl("c"))) {
+            done({ action: "abort", value: originalValue });
+            return;
+          }
+
+          if (editing) {
+            if (matchesKey(data, Key.escape)) {
+              stopEditing();
+              tui.requestRender();
               return;
             }
-
             if (matchesKey(data, Key.enter)) {
-              if (pendingAction) {
-                resolve(pendingAction);
+              resolve(selectedOption().action);
+              return;
+            }
+            if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+              const delta = matchesKey(data, Key.up) ? -1 : 1;
+              selectedIndex = Math.max(0, Math.min(options.length - 1, selectedIndex + delta));
+              pendingAction = null;
+              stopEditing();
+              tui.requestRender();
+              return;
+            }
+
+            input.handleInput(data);
+            error = null;
+            tui.requestRender();
+            return;
+          }
+
+          if (matchesKey(data, Key.escape)) {
+            done({ action: "abort", value: originalValue });
+            return;
+          }
+
+          if (matchesKey(data, Key.tab) && isAllowOption(selectedOption())) {
+            beginEditing();
+            tui.requestRender();
+            return;
+          }
+
+          if (matchesKey(data, Key.enter)) {
+            if (pendingAction) {
+              resolve(pendingAction);
+            } else {
+              resolve(options[selectedIndex]?.action ?? "abort");
+            }
+            return;
+          }
+
+          if (matchesKey(data, Key.up)) {
+            selectedIndex = Math.max(0, selectedIndex - 1);
+            pendingAction = null;
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, Key.down)) {
+            selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
+            pendingAction = null;
+            tui.requestRender();
+            return;
+          }
+
+          for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            if (data === opt.key) {
+              // Exact case match (uppercase P/A) → immediate
+              resolve(opt.action);
+              return;
+            }
+            if (data.toLowerCase() === opt.key.toLowerCase()) {
+              // Lowercase match → confirmation required for P/A
+              if (opt.confirm) {
+                pendingAction = opt.action;
+                selectedIndex = i;
               } else {
-                resolve(options[selectedIndex]?.action ?? "abort");
-              }
-              return;
-            }
-
-            if (matchesKey(data, Key.up)) {
-              selectedIndex = Math.max(0, selectedIndex - 1);
-              pendingAction = null;
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.down)) {
-              selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
-              pendingAction = null;
-              tui.requestRender();
-              return;
-            }
-
-            for (let i = 0; i < options.length; i++) {
-              const opt = options[i];
-              if (data === opt.key) {
-                // Exact case match (uppercase P/A) → immediate
                 resolve(opt.action);
-                return;
               }
-              if (data.toLowerCase() === opt.key.toLowerCase()) {
-                // Lowercase match → confirmation required for P/A
-                if (opt.confirm) {
-                  pendingAction = opt.action;
-                  selectedIndex = i;
-                } else {
-                  resolve(opt.action);
-                }
-                tui.requestRender();
-                return;
-              }
+              tui.requestRender();
+              return;
             }
-          },
+          }
+        },
 
-          invalidate(): void {
-            // no-op
-          },
-        };
-      },
-    );
+        invalidate(): void {
+          input.invalidate();
+        },
+      };
+    });
 
-    return result ?? "abort";
+    return result ?? { action: "abort", value: originalValue };
   }
 
   async function promptDomainBlock(
     ctx: ExtensionContext,
     domain: string,
-  ): Promise<"abort" | "session" | "project" | "global"> {
+  ): Promise<PermissionPromptResult> {
     return showPermissionPrompt(
       ctx,
       `🌐 Network blocked: "${domain}" is not in allowedDomains`,
       PERMISSION_OPTIONS,
+      domain,
+      (value) => {
+        if (value.length === 0) return "Rule cannot be empty.";
+        if (!domainIsAllowed(domain, [value])) {
+          return `Rule must match the blocked domain "${domain}".`;
+        }
+        return null;
+      },
     );
   }
 
   async function promptReadBlock(
     ctx: ExtensionContext,
     filePath: string,
-  ): Promise<"abort" | "session" | "project" | "global"> {
+  ): Promise<PermissionPromptResult> {
     return showPermissionPrompt(
       ctx,
       `📖 Read blocked: "${filePath}" is not in allowRead`,
       PERMISSION_OPTIONS,
+      filePath,
+      (value) => {
+        if (value.length === 0) return "Rule cannot be empty.";
+        if (!matchesPattern(filePath, [value])) {
+          return `Rule must match the blocked path "${filePath}".`;
+        }
+        return null;
+      },
     );
   }
 
   async function promptWriteBlock(
     ctx: ExtensionContext,
     filePath: string,
-  ): Promise<"abort" | "session" | "project" | "global"> {
+  ): Promise<PermissionPromptResult> {
     return showPermissionPrompt(
       ctx,
       `📝 Write blocked: "${filePath}" is not in allowWrite`,
       PERMISSION_OPTIONS,
+      filePath,
+      (value) => {
+        if (value.length === 0) return "Rule cannot be empty.";
+        if (!matchesPattern(filePath, [value])) {
+          return `Rule must match the blocked path "${filePath}".`;
+        }
+        return null;
+      },
     );
   }
 
   function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxConfig): void {
     if (!allowsAllDomains(config.network?.allowedDomains)) return;
+    warnAllDomainsAllowed(ctx);
+  }
+
+  function warnAllDomainsAllowed(ctx: ExtensionContext): void {
     ctx.ui.notify(
       '⚠️ Network sandbox allows all domains because network.allowedDomains contains "*". ' +
         'Only use this intentionally; remove "*" to restore per-domain prompts.',
@@ -748,18 +888,19 @@ export default function (pi: ExtensionAPI) {
           .map((c: any) => c.text)
           .join("\n");
 
-        const blockedPath = extractBlockedWritePath(outputText);
-        if (blockedPath) {
+        const rawBlockedPath = extractBlockedWritePath(outputText);
+        if (rawBlockedPath) {
+          const blockedPath = canonicalizePath(rawBlockedPath);
           const choice = await promptWriteBlock(ctx, blockedPath);
-          if (choice !== "abort") {
-            await applyWriteChoice(choice, blockedPath, ctx.cwd);
+          if (choice.action !== "abort") {
+            await applyWriteChoice(choice.action, choice.value, ctx.cwd);
 
             // Check if denyWrite would still block it even after allowing.
             const config = loadConfig(ctx.cwd);
             const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
             if (matchesPattern(blockedPath, config.filesystem?.denyWrite ?? [])) {
               ctx.ui.notify(
-                `⚠️ "${blockedPath}" was added to allowWrite, but it is also in denyWrite and will remain blocked.\n` +
+                `⚠️ "${choice.value}" was added to allowWrite, but "${blockedPath}" is also in denyWrite and will remain blocked.\n` +
                   `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
                 "warning",
               );
@@ -770,7 +911,7 @@ export default function (pi: ExtensionAPI) {
               content: [
                 {
                   type: "text",
-                  text: `\n--- Write access granted for "${blockedPath}", retrying ---\n`,
+                  text: `\n--- Write access granted for "${choice.value}", retrying ---\n`,
                 },
               ],
               details: {},
@@ -795,7 +936,7 @@ export default function (pi: ExtensionAPI) {
     for (const domain of domains) {
       if (!domainIsAllowed(domain, effectiveDomains)) {
         const choice = await promptDomainBlock(ctx, domain);
-        if (choice === "abort") {
+        if (choice.action === "abort") {
           return {
             result: {
               output: `Blocked: "${domain}" is not in allowedDomains. Use /sandbox to review your config.`,
@@ -805,7 +946,8 @@ export default function (pi: ExtensionAPI) {
             },
           };
         }
-        await applyDomainChoice(choice, domain, ctx.cwd);
+        await applyDomainChoice(choice.action, choice.value, ctx.cwd);
+        if (allowsAllDomains([choice.value])) warnAllDomainsAllowed(ctx);
       }
     }
 
@@ -829,13 +971,14 @@ export default function (pi: ExtensionAPI) {
       for (const domain of domains) {
         if (!domainIsAllowed(domain, effectiveDomains)) {
           const choice = await promptDomainBlock(ctx, domain);
-          if (choice === "abort") {
+          if (choice.action === "abort") {
             return {
               block: true,
               reason: `Network access to "${domain}" is blocked (not in allowedDomains).`,
             };
           }
-          await applyDomainChoice(choice, domain, ctx.cwd);
+          await applyDomainChoice(choice.action, choice.value, ctx.cwd);
+          if (allowsAllDomains([choice.value])) warnAllDomainsAllowed(ctx);
         }
       }
     }
@@ -852,13 +995,13 @@ export default function (pi: ExtensionAPI) {
 
       if (!matchesPattern(filePath, effectiveAllowRead)) {
         const choice = await promptReadBlock(ctx, filePath);
-        if (choice === "abort") {
+        if (choice.action === "abort") {
           return {
             block: true,
             reason: `Sandbox: read access denied for "${filePath}"`,
           };
         }
-        await applyReadChoice(choice, filePath, ctx.cwd);
+        await applyReadChoice(choice.action, choice.value, ctx.cwd);
         // Allowed — fall through, tool runs.
         return;
       }
@@ -882,13 +1025,27 @@ export default function (pi: ExtensionAPI) {
 
       if (shouldPromptForWrite(path, allowWrite, matchesPattern)) {
         const choice = await promptWriteBlock(ctx, path);
-        if (choice === "abort") {
+        if (choice.action === "abort") {
           return {
             block: true,
             reason: `Sandbox: write access denied for "${path}" (not in allowWrite)`,
           };
         }
-        await applyWriteChoice(choice, path, ctx.cwd);
+        await applyWriteChoice(choice.action, choice.value, ctx.cwd);
+
+        // denyWrite takes precedence — warn if it would still block.
+        if (matchesPattern(path, denyWrite)) {
+          ctx.ui.notify(
+            `⚠️ "${choice.value}" was added to allowWrite, but "${path}" is also in denyWrite and will remain blocked.\n` +
+              `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+            "warning",
+          );
+          return {
+            block: true,
+            reason: `Sandbox: write access denied for "${path}" (also in denyWrite)`,
+          };
+        }
+
         // Allowed — fall through, tool runs.
         return;
       }
