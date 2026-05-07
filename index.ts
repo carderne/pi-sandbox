@@ -522,6 +522,8 @@ export default function (pi: ExtensionAPI) {
   ): Promise<"abort" | "session" | "project" | "global"> {
     if (!ctx.hasUI) return "abort";
 
+    pi.events.emit("request-attention", { message: "Sandbox permission required" });
+
     const result = await ctx.ui.custom<"abort" | "session" | "project" | "global">(
       (tui, theme, _kb, done) => {
         let selectedIndex = 0;
