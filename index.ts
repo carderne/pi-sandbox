@@ -64,7 +64,7 @@ import type {
   AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -83,8 +83,8 @@ import {
   getShellConfig,
   isToolCallEventType,
   SettingsManager,
-} from "@mariozechner/pi-coding-agent";
-import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
