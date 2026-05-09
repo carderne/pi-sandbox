@@ -870,6 +870,16 @@ export default function (pi: ExtensionAPI) {
       const allowWrite = getEffectiveAllowWrite(ctx.cwd);
       const denyWrite = config.filesystem?.denyWrite ?? [];
 
+      // denyWrite takes precedence and is never prompted.
+      if (matchesPattern(path, denyWrite)) {
+        return {
+          block: true,
+          reason:
+            `Sandbox: write access denied for "${path}" (in denyWrite). ` +
+            `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+        };
+      }
+
       if (shouldPromptForWrite(path, allowWrite, matchesPattern)) {
         const choice = await promptWriteBlock(ctx, path);
         if (choice === "abort") {
@@ -879,31 +889,8 @@ export default function (pi: ExtensionAPI) {
           };
         }
         await applyWriteChoice(choice, path, ctx.cwd);
-
-        // denyWrite takes precedence — warn if it would still block.
-        if (matchesPattern(path, denyWrite)) {
-          ctx.ui.notify(
-            `⚠️ "${path}" was added to allowWrite, but it is also in denyWrite and will remain blocked.\n` +
-              `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
-            "warning",
-          );
-          return {
-            block: true,
-            reason: `Sandbox: write access denied for "${path}" (also in denyWrite)`,
-          };
-        }
-
         // Allowed — fall through, tool runs.
         return;
-      }
-
-      if (matchesPattern(path, denyWrite)) {
-        return {
-          block: true,
-          reason:
-            `Sandbox: write access denied for "${path}" (in denyWrite). ` +
-            `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
-        };
       }
     }
   });
