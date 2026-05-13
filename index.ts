@@ -1054,7 +1054,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── Sandbox lifecycle ──────────────────────────────────────────────────────
 
-  function setSandboxStatus(ctx: ExtensionContext, config: SandboxConfig): void {
+  function setSandboxEnabledStatus(ctx: ExtensionContext, config: SandboxConfig): void {
     const networkLabel = allowsAllDomains(config.network?.allowedDomains)
       ? "all domains"
       : `${config.network?.allowedDomains?.length ?? 0} domains`;
@@ -1063,6 +1063,10 @@ export default function (pi: ExtensionAPI) {
       "sandbox",
       ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkLabel}, ${writeCount} write paths`),
     );
+  }
+
+  function setSandboxDisabledStatus(ctx: ExtensionContext): void {
+    ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("error", "🔓 Sandbox: disabled"));
   }
 
   async function enableSandbox(ctx: ExtensionContext): Promise<boolean> {
@@ -1112,11 +1116,12 @@ export default function (pi: ExtensionAPI) {
       sandboxInitialized = true;
 
       warnIfAllDomainsAllowed(ctx, config);
-      setSandboxStatus(ctx, config);
+      setSandboxEnabledStatus(ctx, config);
       return true;
     } catch (err) {
       sandboxEnabled = false;
       sandboxInitialized = false;
+      setSandboxDisabledStatus(ctx);
       ctx.ui.notify(
         `Sandbox initialization failed: ${err instanceof Error ? err.message : err}`,
         "error",
@@ -1141,7 +1146,7 @@ export default function (pi: ExtensionAPI) {
 
     sandboxEnabled = false;
     sandboxInitialized = false;
-    ctx.ui.setStatus("sandbox", "");
+    setSandboxDisabledStatus(ctx);
     return true;
   }
 
@@ -1162,6 +1167,7 @@ export default function (pi: ExtensionAPI) {
     if (noSandbox) {
       sandboxEnabled = false;
       sandboxInitialized = false;
+      setSandboxDisabledStatus(ctx);
       ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
       return;
     }
@@ -1171,6 +1177,7 @@ export default function (pi: ExtensionAPI) {
     if (!config.enabled) {
       sandboxEnabled = false;
       sandboxInitialized = false;
+      setSandboxDisabledStatus(ctx);
       ctx.ui.notify("Sandbox disabled via config", "info");
       return;
     }
