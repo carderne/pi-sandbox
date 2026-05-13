@@ -96,7 +96,10 @@ Note below that the order of precedence for filesystem read and write are opposi
 
 ```
 pi --no-sandbox          disable sandboxing for the session
+Alt+S                    toggle sandboxing on/off for the session
 /sandbox                 show current configuration and session allowances
+/sandbox-enable          enable sandboxing for the session
+/sandbox-disable         disable sandboxing for the session
 ```
 
 ## What it does

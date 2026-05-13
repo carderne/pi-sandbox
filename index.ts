@@ -1052,30 +1052,30 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ── session_start ───────────────────────────────────────────────────────────
+  // ── Sandbox lifecycle ──────────────────────────────────────────────────────
 
-  pi.on("session_start", async (_event, ctx) => {
-    const noSandbox = pi.getFlag("no-sandbox") as boolean;
+  function setSandboxStatus(ctx: ExtensionContext, config: SandboxConfig): void {
+    const networkLabel = allowsAllDomains(config.network?.allowedDomains)
+      ? "all domains"
+      : `${config.network?.allowedDomains?.length ?? 0} domains`;
+    const writeCount = config.filesystem?.allowWrite?.length ?? 0;
+    ctx.ui.setStatus(
+      "sandbox",
+      ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkLabel}, ${writeCount} write paths`),
+    );
+  }
 
-    if (noSandbox) {
-      sandboxEnabled = false;
-      ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
-      return;
+  async function enableSandbox(ctx: ExtensionContext): Promise<boolean> {
+    if (sandboxEnabled) {
+      ctx.ui.notify("Sandbox is already enabled", "info");
+      return false;
     }
 
     const config = loadConfig(ctx.cwd);
-
-    if (!config.enabled) {
-      sandboxEnabled = false;
-      ctx.ui.notify("Sandbox disabled via config", "info");
-      return;
-    }
-
     const platform = process.platform;
     if (platform !== "darwin" && platform !== "linux") {
-      sandboxEnabled = false;
       ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
-      return;
+      return false;
     }
 
     try {
@@ -1112,22 +1112,70 @@ export default function (pi: ExtensionAPI) {
       sandboxInitialized = true;
 
       warnIfAllDomainsAllowed(ctx, config);
-
-      const networkLabel = allowsAllDomains(config.network?.allowedDomains)
-        ? "all domains"
-        : `${config.network?.allowedDomains?.length ?? 0} domains`;
-      const writeCount = config.filesystem?.allowWrite?.length ?? 0;
-      ctx.ui.setStatus(
-        "sandbox",
-        ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkLabel}, ${writeCount} write paths`),
-      );
+      setSandboxStatus(ctx, config);
+      return true;
     } catch (err) {
       sandboxEnabled = false;
+      sandboxInitialized = false;
       ctx.ui.notify(
         `Sandbox initialization failed: ${err instanceof Error ? err.message : err}`,
         "error",
       );
+      return false;
     }
+  }
+
+  async function disableSandbox(ctx: ExtensionContext): Promise<boolean> {
+    if (!sandboxEnabled) {
+      ctx.ui.notify("Sandbox is already disabled", "info");
+      return false;
+    }
+
+    if (sandboxInitialized) {
+      try {
+        await SandboxManager.reset();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+
+    sandboxEnabled = false;
+    sandboxInitialized = false;
+    ctx.ui.setStatus("sandbox", "");
+    return true;
+  }
+
+  async function toggleSandbox(ctx: ExtensionContext): Promise<void> {
+    if (sandboxEnabled) {
+      if (await disableSandbox(ctx)) ctx.ui.notify("Sandbox disabled", "info");
+      return;
+    }
+
+    if (await enableSandbox(ctx)) ctx.ui.notify("Sandbox enabled", "info");
+  }
+
+  // ── session_start ───────────────────────────────────────────────────────────
+
+  pi.on("session_start", async (_event, ctx) => {
+    const noSandbox = pi.getFlag("no-sandbox") as boolean;
+
+    if (noSandbox) {
+      sandboxEnabled = false;
+      sandboxInitialized = false;
+      ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
+      return;
+    }
+
+    const config = loadConfig(ctx.cwd);
+
+    if (!config.enabled) {
+      sandboxEnabled = false;
+      sandboxInitialized = false;
+      ctx.ui.notify("Sandbox disabled via config", "info");
+      return;
+    }
+
+    await enableSandbox(ctx);
   });
 
   // ── session_shutdown ────────────────────────────────────────────────────────
@@ -1144,83 +1192,22 @@ export default function (pi: ExtensionAPI) {
 
   // ── /sandbox command ────────────────────────────────────────────────────────
 
+  pi.registerShortcut("alt+s", {
+    description: "Toggle sandbox on/off for this session",
+    handler: toggleSandbox,
+  });
+
   pi.registerCommand("sandbox-enable", {
     description: "Enable the sandbox for this session",
     handler: async (_args, ctx) => {
-      if (sandboxEnabled) {
-        ctx.ui.notify("Sandbox is already enabled", "info");
-        return;
-      }
-
-      const config = loadConfig(ctx.cwd);
-      const platform = process.platform;
-      if (platform !== "darwin" && platform !== "linux") {
-        ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
-        return;
-      }
-
-      try {
-        const configExt = config as unknown as {
-          ignoreViolations?: Record<string, string[]>;
-          enableWeakerNestedSandbox?: boolean;
-          allowBrowserProcess?: boolean;
-        };
-
-        await SandboxManager.initialize(
-          {
-            network: config.network,
-            filesystem: config.filesystem,
-            ignoreViolations: configExt.ignoreViolations,
-            enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
-            allowBrowserProcess: configExt.allowBrowserProcess,
-            enableWeakerNetworkIsolation: true,
-          },
-          createNetworkAskCallback(config.network?.allowedDomains ?? []),
-        );
-
-        sandboxEnabled = true;
-        sandboxInitialized = true;
-
-        warnIfAllDomainsAllowed(ctx, config);
-
-        const networkLabel = allowsAllDomains(config.network?.allowedDomains)
-          ? "all domains"
-          : `${config.network?.allowedDomains?.length ?? 0} domains`;
-        const writeCount = config.filesystem?.allowWrite?.length ?? 0;
-        ctx.ui.setStatus(
-          "sandbox",
-          ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkLabel}, ${writeCount} write paths`),
-        );
-        ctx.ui.notify("Sandbox enabled", "info");
-      } catch (err) {
-        ctx.ui.notify(
-          `Sandbox initialization failed: ${err instanceof Error ? err.message : err}`,
-          "error",
-        );
-      }
+      if (await enableSandbox(ctx)) ctx.ui.notify("Sandbox enabled", "info");
     },
   });
 
   pi.registerCommand("sandbox-disable", {
     description: "Disable the sandbox for this session",
     handler: async (_args, ctx) => {
-      if (!sandboxEnabled) {
-        ctx.ui.notify("Sandbox is already disabled", "info");
-        return;
-      }
-
-      if (sandboxInitialized) {
-        try {
-          await SandboxManager.reset();
-        } catch {
-          // Ignore cleanup errors
-        }
-      }
-
-      sandboxEnabled = false;
-      sandboxInitialized = false;
-      ctx.ui.setStatus("sandbox", "");
-      ctx.ui.notify("Sandbox disabled", "info");
+      if (await disableSandbox(ctx)) ctx.ui.notify("Sandbox disabled", "info");
     },
   });
 
