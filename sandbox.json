@@ -3,6 +3,7 @@
   "allowBrowserProcess": true,
   "network": {
     "allowLocalBinding": true,
+    "allowUnauthenticatedSocksProxy": true,
     "allowAllUnixSockets": true,
     "allowedDomains": [
       "localhost",

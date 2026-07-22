@@ -20,6 +20,7 @@ test("deepMerge merges sections while replacing configured arrays", () => {
   assert.equal(merged.enabled, false);
   assert.deepEqual(merged.network?.allowedDomains, ["example.com"]);
   assert.deepEqual(merged.network?.deniedDomains, []);
+  assert.equal(merged.network?.allowUnauthenticatedSocksProxy, process.platform === "darwin");
   assert.deepEqual(merged.filesystem?.allowWrite, ["/work"]);
   assert.deepEqual(merged.filesystem?.denyWrite, DEFAULT_CONFIG.filesystem?.denyWrite);
   assert.equal(merged.allowBrowserProcess, true);

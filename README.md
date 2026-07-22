@@ -72,6 +72,7 @@ Note below that the order of precedence for filesystem read and write are opposi
   "network": {
     "allowLocalBinding": true,     // ditto
     "allowAllUnixSockets": true,   // ditto
+    "allowUnauthenticatedSocksProxy": true, // Enables Git-over-SSH on macOS
     "allowedDomains": ["github.com", "*.github.com"],
     "deniedDomains": []
   },
@@ -138,6 +139,10 @@ files to check.
 allow all domains; pi-sandbox shows a warning when this is configured because it
 removes per-domain prompts and can be easy to add accidentally. `allowWrite` uses prefix
 matching, so `.` covers the entire current working directory.
+
+`allowUnauthenticatedSocksProxy` is enabled by default on macOS so Git-over-SSH
+works with the built-in `nc`. Domain filtering still applies, but another local process
+that discovers the temporary proxy port can use it while the sandbox is running.
 
 > **⚠️ Read and write have different precedence rules:**
 >

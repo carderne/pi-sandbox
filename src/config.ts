@@ -5,13 +5,17 @@ import { dirname, join } from "node:path";
 import { type SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export interface SandboxConfig extends SandboxRuntimeConfig {
+export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
   enabled?: boolean;
-}
+  network?: NonNullable<SandboxRuntimeConfig["network"]> & {
+    allowUnauthenticatedSocksProxy?: boolean;
+  };
+};
 
 export const DEFAULT_CONFIG: SandboxConfig = {
   enabled: true,
   network: {
+    allowUnauthenticatedSocksProxy: process.platform === "darwin",
     allowedDomains: [
       "npmjs.org",
       "*.npmjs.org",
