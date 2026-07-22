@@ -12,6 +12,14 @@ export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
   };
 };
 
+type NetworkConfig = NonNullable<SandboxConfig["network"]>;
+type FilesystemConfig = NonNullable<SandboxConfig["filesystem"]>;
+
+export type SandboxConfigFile = Omit<Partial<SandboxConfig>, "network" | "filesystem"> & {
+  network?: Partial<NetworkConfig>;
+  filesystem?: Partial<FilesystemConfig>;
+};
+
 export const DEFAULT_CONFIG: SandboxConfig = {
   enabled: true,
   network: {
@@ -38,28 +46,106 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   },
 };
 
-export function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): SandboxConfig {
-  const result: SandboxConfig = { ...base };
-
-  if (overrides.enabled !== undefined) result.enabled = overrides.enabled;
-  if (overrides.network) result.network = { ...base.network, ...overrides.network };
-  if (overrides.filesystem) result.filesystem = { ...base.filesystem, ...overrides.filesystem };
-
-  if (overrides.ignoreViolations) result.ignoreViolations = overrides.ignoreViolations;
-  if (overrides.enableWeakerNestedSandbox !== undefined) {
-    result.enableWeakerNestedSandbox = overrides.enableWeakerNestedSandbox;
-  }
-  if (overrides.allowBrowserProcess !== undefined) {
-    result.allowBrowserProcess = overrides.allowBrowserProcess;
-  }
-
-  return result;
+function mergeObjects(base: SandboxConfig, overrides: SandboxConfigFile): SandboxConfig {
+  return {
+    ...base,
+    ...overrides,
+    network: overrides.network
+      ? ({ ...base.network, ...overrides.network } as NetworkConfig)
+      : base.network,
+    filesystem: overrides.filesystem
+      ? ({ ...base.filesystem, ...overrides.filesystem } as FilesystemConfig)
+      : base.filesystem,
+  };
 }
 
-function readJsonConfig(configPath: string, warn: boolean): Partial<SandboxConfig> {
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) return undefined;
+  return value;
+}
+
+function mergeConfiguredArray(
+  fallback: string[] | undefined,
+  globalValue: unknown,
+  projectValue: unknown,
+): string[] | undefined {
+  const globalEntries = stringArray(globalValue);
+  const projectEntries = stringArray(projectValue);
+  if (globalEntries === undefined && projectEntries === undefined) return fallback;
+  return [...new Set([...(globalEntries ?? []), ...(projectEntries ?? [])])];
+}
+
+export function mergeConfigLayers(
+  defaults: SandboxConfig,
+  globalConfig: SandboxConfigFile,
+  projectConfig: SandboxConfigFile,
+): SandboxConfig {
+  const merged = mergeObjects(mergeObjects(defaults, globalConfig), projectConfig);
+
+  return {
+    ...merged,
+    network: {
+      ...merged.network,
+      allowedDomains:
+        mergeConfiguredArray(
+          defaults.network?.allowedDomains,
+          globalConfig.network?.allowedDomains,
+          projectConfig.network?.allowedDomains,
+        ) ?? [],
+      deniedDomains:
+        mergeConfiguredArray(
+          defaults.network?.deniedDomains,
+          globalConfig.network?.deniedDomains,
+          projectConfig.network?.deniedDomains,
+        ) ?? [],
+      allowUnixSockets: mergeConfiguredArray(
+        defaults.network?.allowUnixSockets,
+        globalConfig.network?.allowUnixSockets,
+        projectConfig.network?.allowUnixSockets,
+      ),
+      allowMachLookup: mergeConfiguredArray(
+        defaults.network?.allowMachLookup,
+        globalConfig.network?.allowMachLookup,
+        projectConfig.network?.allowMachLookup,
+      ),
+    },
+    filesystem: {
+      ...merged.filesystem,
+      denyRead:
+        mergeConfiguredArray(
+          defaults.filesystem?.denyRead,
+          globalConfig.filesystem?.denyRead,
+          projectConfig.filesystem?.denyRead,
+        ) ?? [],
+      allowRead: mergeConfiguredArray(
+        defaults.filesystem?.allowRead,
+        globalConfig.filesystem?.allowRead,
+        projectConfig.filesystem?.allowRead,
+      ),
+      allowWrite:
+        mergeConfiguredArray(
+          defaults.filesystem?.allowWrite,
+          globalConfig.filesystem?.allowWrite,
+          projectConfig.filesystem?.allowWrite,
+        ) ?? [],
+      denyWrite:
+        mergeConfiguredArray(
+          defaults.filesystem?.denyWrite,
+          globalConfig.filesystem?.denyWrite,
+          projectConfig.filesystem?.denyWrite,
+        ) ?? [],
+    },
+  };
+}
+
+function readJsonConfig(configPath: string, warn: boolean): SandboxConfigFile {
   if (!existsSync(configPath)) return {};
   try {
-    return JSON.parse(readFileSync(configPath, "utf-8"));
+    const parsed: unknown = JSON.parse(readFileSync(configPath, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("configuration must be a JSON object");
+    }
+    return parsed as SandboxConfigFile;
   } catch (error) {
     if (warn) console.error(`Warning: Could not parse ${configPath}: ${error}`);
     return {};
@@ -78,52 +164,46 @@ export function loadConfig(cwd: string): SandboxConfig {
   const globalConfigPath = join(getAgentDir(), "sandbox.json");
   const globalConfig = readJsonConfig(globalConfigPath, true);
   const projectConfig = readJsonConfig(projectConfigPath, true);
-  return deepMerge(deepMerge(DEFAULT_CONFIG, globalConfig), projectConfig);
+  return mergeConfigLayers(DEFAULT_CONFIG, globalConfig, projectConfig);
 }
 
-function writeConfigFile(configPath: string, config: Partial<SandboxConfig>): void {
+function writeConfigFile(configPath: string, config: SandboxConfigFile): void {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
 export function addDomainToConfig(configPath: string, domain: string): void {
   const config = readJsonConfig(configPath, false);
-  const existing = config.network?.allowedDomains ?? [];
+  const existing = stringArray(config.network?.allowedDomains) ?? [];
   if (existing.includes(domain)) return;
 
   config.network = {
     ...config.network,
     allowedDomains: [...existing, domain],
-    deniedDomains: config.network?.deniedDomains ?? [],
   };
   writeConfigFile(configPath, config);
 }
 
 export function addReadPathToConfig(configPath: string, pathToAdd: string): void {
   const config = readJsonConfig(configPath, false);
-  const existing = config.filesystem?.allowRead ?? [];
+  const existing = stringArray(config.filesystem?.allowRead) ?? [];
   if (existing.includes(pathToAdd)) return;
 
   config.filesystem = {
     ...config.filesystem,
     allowRead: [...existing, pathToAdd],
-    denyRead: config.filesystem?.denyRead ?? [],
-    allowWrite: config.filesystem?.allowWrite ?? [],
-    denyWrite: config.filesystem?.denyWrite ?? [],
   };
   writeConfigFile(configPath, config);
 }
 
 export function addWritePathToConfig(configPath: string, pathToAdd: string): void {
   const config = readJsonConfig(configPath, false);
-  const existing = config.filesystem?.allowWrite ?? [];
+  const existing = stringArray(config.filesystem?.allowWrite) ?? [];
   if (existing.includes(pathToAdd)) return;
 
   config.filesystem = {
     ...config.filesystem,
     allowWrite: [...existing, pathToAdd],
-    denyRead: config.filesystem?.denyRead ?? [],
-    denyWrite: config.filesystem?.denyWrite ?? [],
   };
   writeConfigFile(configPath, config);
 }

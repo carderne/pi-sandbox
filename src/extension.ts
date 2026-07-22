@@ -25,6 +25,7 @@ import {
   extractBlockedWritePath,
   initializeSandbox,
   reinitializeSandbox,
+  resolveAllowances,
   type SessionAllowances,
   supportsNodeEnvProxy,
 } from "./sandbox-runtime.ts";
@@ -53,18 +54,10 @@ export default function (pi: ExtensionAPI) {
   let sandboxInitialized = false;
   const allowances: SessionAllowances = { domains: [], readPaths: [], writePaths: [] };
 
-  const effectiveDomains = (cwd: string) => [
-    ...(loadConfig(cwd).network?.allowedDomains ?? []),
-    ...allowances.domains,
-  ];
-  const effectiveReadPaths = (cwd: string) => [
-    ...(loadConfig(cwd).filesystem?.allowRead ?? []),
-    ...allowances.readPaths,
-  ];
-  const effectiveWritePaths = (cwd: string) => [
-    ...(loadConfig(cwd).filesystem?.allowWrite ?? []),
-    ...allowances.writePaths,
-  ];
+  const effectiveAllowances = (cwd: string) => resolveAllowances(loadConfig(cwd), allowances);
+  const effectiveDomains = (cwd: string) => effectiveAllowances(cwd).domains;
+  const effectiveReadPaths = (cwd: string) => effectiveAllowances(cwd).readPaths;
+  const effectiveWritePaths = (cwd: string) => effectiveAllowances(cwd).writePaths;
 
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
@@ -116,7 +109,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      await initializeSandbox(config);
+      await initializeSandbox(config, allowances);
       if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
         process.env.NODE_USE_ENV_PROXY ??= "1";
       }

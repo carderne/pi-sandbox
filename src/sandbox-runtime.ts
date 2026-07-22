@@ -17,6 +17,36 @@ export interface SessionAllowances {
   writePaths: string[];
 }
 
+export interface EffectiveAllowances {
+  domains: string[];
+  readPaths: string[];
+  writePaths: string[];
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+export function resolveAllowances(
+  config: SandboxConfig,
+  allowances?: SessionAllowances,
+): EffectiveAllowances {
+  const writePaths = unique([
+    ...(config.filesystem?.allowWrite ?? []),
+    ...(allowances?.writePaths ?? []),
+  ]);
+
+  return {
+    domains: unique([...(config.network?.allowedDomains ?? []), ...(allowances?.domains ?? [])]),
+    readPaths: unique([
+      ...(config.filesystem?.allowRead ?? []),
+      ...(allowances?.readPaths ?? []),
+      ...writePaths,
+    ]),
+    writePaths,
+  };
+}
+
 export function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCallback {
   return async ({ host }) => domainIsAllowed(host, allowedDomains);
 }
@@ -25,17 +55,19 @@ export function buildRuntimeConfig(
   config: SandboxConfig,
   allowances?: SessionAllowances,
 ): SandboxRuntimeConfig {
+  const effective = resolveAllowances(config, allowances);
+
   return {
     network: {
       ...config.network,
-      allowedDomains: [...(config.network?.allowedDomains ?? []), ...(allowances?.domains ?? [])],
+      allowedDomains: effective.domains,
       deniedDomains: config.network?.deniedDomains ?? [],
     },
     filesystem: {
       ...config.filesystem,
       denyRead: config.filesystem?.denyRead ?? [],
-      allowRead: [...(config.filesystem?.allowRead ?? []), ...(allowances?.readPaths ?? [])],
-      allowWrite: [...(config.filesystem?.allowWrite ?? []), ...(allowances?.writePaths ?? [])],
+      allowRead: effective.readPaths,
+      allowWrite: effective.writePaths,
       denyWrite: config.filesystem?.denyWrite ?? [],
     },
     ignoreViolations: config.ignoreViolations,

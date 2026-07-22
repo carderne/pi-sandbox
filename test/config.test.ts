@@ -1,47 +1,103 @@
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import assert from "node:assert/strict";
 
-import { deepMerge, DEFAULT_CONFIG } from "../src/config.ts";
+import {
+  addDomainToConfig,
+  addReadPathToConfig,
+  addWritePathToConfig,
+  DEFAULT_CONFIG,
+  mergeConfigLayers,
+} from "../src/config.ts";
 
-test("deepMerge merges sections while replacing configured arrays", () => {
-  const merged = deepMerge(DEFAULT_CONFIG, {
-    enabled: false,
-    network: { allowedDomains: ["example.com"], deniedDomains: [] },
-    filesystem: {
-      denyRead: DEFAULT_CONFIG.filesystem?.denyRead ?? [],
-      allowRead: DEFAULT_CONFIG.filesystem?.allowRead,
-      allowWrite: ["/work"],
-      denyWrite: DEFAULT_CONFIG.filesystem?.denyWrite ?? [],
+test("mergeConfigLayers combines configured arrays and deduplicates entries", () => {
+  const merged = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    {
+      network: {
+        allowedDomains: ["global.example.com", "shared.example.com"],
+        deniedDomains: ["blocked.example.com"],
+        allowUnixSockets: ["/global.sock"],
+      },
+      filesystem: {
+        allowRead: ["/global", "/shared"],
+        denyWrite: ["global.key"],
+      },
     },
-    allowBrowserProcess: true,
-  });
+    {
+      network: {
+        allowedDomains: ["project.example.com", "shared.example.com"],
+        deniedDomains: ["project-blocked.example.com"],
+        allowUnixSockets: ["/project.sock"],
+      },
+      filesystem: {
+        allowRead: ["/project", "/shared"],
+        denyWrite: ["project.key"],
+      },
+    },
+  );
 
-  assert.equal(merged.enabled, false);
-  assert.deepEqual(merged.network?.allowedDomains, ["example.com"]);
-  assert.deepEqual(merged.network?.deniedDomains, []);
-  assert.equal(merged.network?.allowUnauthenticatedSocksProxy, process.platform === "darwin");
-  assert.deepEqual(merged.filesystem?.allowWrite, ["/work"]);
-  assert.deepEqual(merged.filesystem?.denyWrite, DEFAULT_CONFIG.filesystem?.denyWrite);
-  assert.equal(merged.allowBrowserProcess, true);
+  assert.deepEqual(merged.network?.allowedDomains, [
+    "global.example.com",
+    "shared.example.com",
+    "project.example.com",
+  ]);
+  assert.deepEqual(merged.network?.deniedDomains, [
+    "blocked.example.com",
+    "project-blocked.example.com",
+  ]);
+  assert.deepEqual(merged.network?.allowUnixSockets, ["/global.sock", "/project.sock"]);
+  assert.deepEqual(merged.filesystem?.allowRead, ["/global", "/shared", "/project"]);
+  assert.deepEqual(merged.filesystem?.denyWrite, ["global.key", "project.key"]);
 });
 
-test("a later merge takes precedence over global configuration", () => {
-  const global = deepMerge(DEFAULT_CONFIG, {
+test("mergeConfigLayers ignores malformed permission arrays", () => {
+  const merged = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    { filesystem: { denyWrite: "*.key" as unknown as string[] } },
+    {},
+  );
+
+  assert.deepEqual(merged.filesystem?.denyWrite, DEFAULT_CONFIG.filesystem?.denyWrite);
+});
+
+test("mergeConfigLayers uses defaults only for arrays not configured by either file", () => {
+  const merged = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    {
+      enabled: false,
+      filesystem: { allowWrite: [] },
+    },
+    {
+      enabled: true,
+      allowBrowserProcess: true,
+    },
+  );
+
+  assert.equal(merged.enabled, true);
+  assert.equal(merged.allowBrowserProcess, true);
+  assert.deepEqual(merged.filesystem?.allowWrite, []);
+  assert.deepEqual(merged.filesystem?.allowRead, DEFAULT_CONFIG.filesystem?.allowRead);
+  assert.deepEqual(merged.network?.allowedDomains, DEFAULT_CONFIG.network?.allowedDomains);
+});
+
+test("permission writers only persist the property being changed", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-config-"));
+  const configPath = join(root, "sandbox.json");
+
+  addReadPathToConfig(configPath, "/read");
+  addWritePathToConfig(configPath, "/write");
+  addDomainToConfig(configPath, "example.com");
+
+  const written = JSON.parse(readFileSync(configPath, "utf8"));
+  assert.deepEqual(written, {
+    network: { allowedDomains: ["example.com"] },
     filesystem: {
-      denyRead: [],
-      allowRead: ["/global"],
-      allowWrite: [],
-      denyWrite: [],
+      allowRead: ["/read"],
+      allowWrite: ["/write"],
     },
   });
-  const project = deepMerge(global, {
-    filesystem: {
-      denyRead: [],
-      allowRead: ["/project"],
-      allowWrite: [],
-      denyWrite: [],
-    },
-  });
-  assert.deepEqual(project.filesystem?.allowRead, ["/project"]);
 });
