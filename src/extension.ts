@@ -35,6 +35,7 @@ import {
   type PermissionChoice,
   promptDomainBlock,
   promptReadBlock,
+  showPermissionPrompt,
   promptWriteBlock,
   warnIfAllDomainsAllowed,
 } from "./ui.ts";
@@ -330,6 +331,31 @@ export default function (pi: ExtensionAPI) {
       sandboxInitialized = false;
       ctx.ui.setStatus("sandbox", "");
       ctx.ui.notify("Sandbox disabled", "info");
+    },
+  });
+
+  pi.registerCommand("sandbox-allow", {
+    description: "Prompt to allow a domain or read/write access to a file path",
+    handler: async (args, ctx) => {
+      const [kind, ...targetParts] = args.trim().split(/\s+/);
+      const targetArg = targetParts.join(" ");
+
+      if ((kind !== "domain" && kind !== "read" && kind !== "write") || !targetArg) {
+        ctx.ui.notify("Usage: /sandbox-allow <domain|read|write> <domain-or-path>", "error");
+        return;
+      }
+
+      const target = kind === "domain" ? targetArg : canonicalizePath(targetArg);
+      const configKey =
+        kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
+      const choice = await showPermissionPrompt(ctx, `Add ${target} to ${configKey}?`);
+      if (choice === "abort") {
+        ctx.ui.notify("Allow cancelled", "info");
+        return;
+      }
+
+      await applyChoice(choice, kind, target, ctx.cwd);
+      ctx.ui.notify(`Added ${target} to ${configKey}`, "info");
     },
   });
 

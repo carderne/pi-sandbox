@@ -100,10 +100,13 @@ Note below that the order of precedence for filesystem read and write are opposi
 #### Usage
 
 ```
-pi --no-sandbox          disable sandboxing for the session
-/sandbox                 show current configuration and session allowances
-/sandbox-enable          enable the sandbox for this session
-/sandbox-disable         disable the sandbox for this session
+pi --no-sandbox                  disable sandboxing for the session
+/sandbox                         show current configuration and session allowances
+/sandbox-enable                  enable the sandbox for this session
+/sandbox-disable                 disable the sandbox for this session
+/sandbox-allow domain <url>      prompt to add a domain to allowedDomains
+/sandbox-allow read <path>       prompt to add a path to allowRead
+/sandbox-allow write <path>      prompt to add a path to allowWrite
 ```
 
 ## What it does
