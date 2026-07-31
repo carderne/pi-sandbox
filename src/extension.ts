@@ -32,7 +32,7 @@ import {
 import {
   formatSandboxConfiguration,
   formatSandboxStatus,
-  type PermissionChoice,
+  type PermissionPromptResult,
   promptDomainBlock,
   promptReadBlock,
   showPermissionPrompt,
@@ -70,7 +70,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function applyChoice(
-    choice: Exclude<PermissionChoice, "abort">,
+    choice: Exclude<PermissionPromptResult["action"], "abort">,
     kind: "domain" | "read" | "write",
     value: string,
     cwd: string,
@@ -170,13 +170,13 @@ export default function (pi: ExtensionAPI) {
 
         if (blockedPath) {
           const choice = await promptWriteBlock(ctx, blockedPath);
-          if (choice !== "abort") {
-            await applyChoice(choice, "write", blockedPath, ctx.cwd);
+          if (choice.action !== "abort") {
+            await applyChoice(choice.action, "write", choice.value, ctx.cwd);
             const config = loadConfig(ctx.cwd);
             const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
             if (matchesPattern(blockedPath, config.filesystem?.denyWrite ?? [])) {
               ctx.ui.notify(
-                `⚠️ "${blockedPath}" was added to allowWrite, but it is also in denyWrite and will remain blocked.\n` +
+                `⚠️ "${choice.value}" was added to allowWrite, but "${blockedPath}" is also in denyWrite and will remain blocked.\n` +
                   `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
                 "warning",
               );
@@ -186,7 +186,7 @@ export default function (pi: ExtensionAPI) {
               content: [
                 {
                   type: "text",
-                  text: `\n--- Write access granted for "${blockedPath}", retrying ---\n`,
+                  text: `\n--- Write access granted for "${choice.value}", retrying ---\n`,
                 },
               ],
               details: {},
@@ -205,7 +205,7 @@ export default function (pi: ExtensionAPI) {
     for (const domain of extractDomainsFromCommand(event.command)) {
       if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
         const choice = await promptDomainBlock(ctx, domain);
-        if (choice === "abort") {
+        if (choice.action === "abort") {
           return {
             result: {
               output: `Blocked: "${domain}" is not in allowedDomains. Use /sandbox to review your config.`,
@@ -215,7 +215,7 @@ export default function (pi: ExtensionAPI) {
             },
           };
         }
-        await applyChoice(choice, "domain", domain, ctx.cwd);
+        await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
       }
     }
     return { operations: createSandboxedBashOps(userShellPath) };
@@ -231,13 +231,13 @@ export default function (pi: ExtensionAPI) {
       for (const domain of extractDomainsFromCommand(event.input.command)) {
         if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
           const choice = await promptDomainBlock(ctx, domain);
-          if (choice === "abort") {
+          if (choice.action === "abort") {
             return {
               block: true,
               reason: `Network access to "${domain}" is blocked (not in allowedDomains).`,
             };
           }
-          await applyChoice(choice, "domain", domain, ctx.cwd);
+          await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
         }
       }
     }
@@ -246,10 +246,10 @@ export default function (pi: ExtensionAPI) {
       const path = canonicalizePath(event.input.path);
       if (!matchesPattern(path, effectiveReadPaths(ctx.cwd))) {
         const choice = await promptReadBlock(ctx, path);
-        if (choice === "abort") {
+        if (choice.action === "abort") {
           return { block: true, reason: `Sandbox: read access denied for "${path}"` };
         }
-        await applyChoice(choice, "read", path, ctx.cwd);
+        await applyChoice(choice.action, "read", choice.value, ctx.cwd);
         return;
       }
     }
@@ -267,13 +267,13 @@ export default function (pi: ExtensionAPI) {
       }
       if (shouldPromptForWrite(path, effectiveWritePaths(ctx.cwd), matchesPattern)) {
         const choice = await promptWriteBlock(ctx, path);
-        if (choice === "abort") {
+        if (choice.action === "abort") {
           return {
             block: true,
             reason: `Sandbox: write access denied for "${path}" (not in allowWrite)`,
           };
         }
-        await applyChoice(choice, "write", path, ctx.cwd);
+        await applyChoice(choice.action, "write", choice.value, ctx.cwd);
         return;
       }
     }
@@ -348,14 +348,24 @@ export default function (pi: ExtensionAPI) {
       const target = kind === "domain" ? targetArg : canonicalizePath(targetArg);
       const configKey =
         kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
-      const choice = await showPermissionPrompt(ctx, `Add ${target} to ${configKey}?`);
-      if (choice === "abort") {
+      const choice = await showPermissionPrompt(
+        ctx,
+        `Add ${target} to ${configKey}?`,
+        target,
+        (value) => {
+          if (!value) return "Rule cannot be empty.";
+          const matches =
+            kind === "domain" ? domainIsAllowed(target, [value]) : matchesPattern(target, [value]);
+          return matches ? null : `Rule must match "${target}".`;
+        },
+      );
+      if (choice.action === "abort") {
         ctx.ui.notify("Allow cancelled", "info");
         return;
       }
 
-      await applyChoice(choice, kind, target, ctx.cwd);
-      ctx.ui.notify(`Added ${target} to ${configKey}`, "info");
+      await applyChoice(choice.action, kind, choice.value, ctx.cwd);
+      ctx.ui.notify(`Added ${choice.value} to ${configKey}`, "info");
     },
   });
 

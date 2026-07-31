@@ -1,11 +1,16 @@
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import { type SandboxConfig } from "./config.ts";
-import { allowsAllDomains } from "./policy.ts";
+import { allowsAllDomains, domainIsAllowed, matchesPattern } from "./policy.ts";
 import { type SessionAllowances } from "./sandbox-runtime.ts";
 
 export type PermissionChoice = "abort" | "session" | "project" | "global";
+
+export interface PermissionPromptResult {
+  action: PermissionChoice;
+  value: string;
+}
 
 interface PromptOption {
   label: string;
@@ -37,42 +42,142 @@ const PERMISSION_OPTIONS: PromptOption[] = [
 export async function showPermissionPrompt(
   ctx: ExtensionContext,
   title: string,
-): Promise<PermissionChoice> {
-  if (!ctx.hasUI) return "abort";
+  originalValue: string,
+  validateValue: (value: string) => string | null,
+): Promise<PermissionPromptResult> {
+  if (!ctx.hasUI) return { action: "abort", value: originalValue };
 
-  const result = await ctx.ui.custom<PermissionChoice>((tui, theme, _kb, done) => {
+  const result = await ctx.ui.custom<PermissionPromptResult>((tui, theme, _kb, done) => {
+    const input = new Input();
     let selectedIndex = 0;
     let pendingAction: PermissionChoice | null = null;
-    const resolve = (action: PermissionChoice) => done(action);
+    let editing = false;
+    let componentFocused = false;
+    let error: string | null = null;
+
+    const selectedOption = (): PromptOption =>
+      PERMISSION_OPTIONS[selectedIndex] ?? PERMISSION_OPTIONS[0]!;
+    const isAllowOption = (option: PromptOption): boolean => option.action !== "abort";
+    const updateFocus = (): void => {
+      input.focused = componentFocused && editing;
+    };
+    const beginEditing = (): void => {
+      input.setValue(originalValue);
+      input.handleInput("\x05");
+      editing = true;
+      error = null;
+      pendingAction = null;
+      updateFocus();
+    };
+    const stopEditing = (): void => {
+      editing = false;
+      error = null;
+      updateFocus();
+    };
+    const resolve = (action: PermissionChoice): void => {
+      if (action === "abort") {
+        done({ action, value: originalValue });
+        return;
+      }
+
+      const value = editing ? input.getValue().trim() : originalValue;
+      const validationError = validateValue(value);
+      if (validationError) {
+        error = validationError;
+        editing = true;
+        updateFocus();
+        tui.requestRender();
+        return;
+      }
+      done({ action, value });
+    };
 
     return {
+      get focused(): boolean {
+        return componentFocused;
+      },
+      set focused(value: boolean) {
+        componentFocused = value;
+        updateFocus();
+      },
       render(width: number): string[] {
         const lines = [truncateToWidth(theme.fg("warning", title), width), ""];
         for (let i = 0; i < PERMISSION_OPTIONS.length; i++) {
-          const option = PERMISSION_OPTIONS[i];
-          const prefix = i === selectedIndex ? " → " : "   ";
+          const option = PERMISSION_OPTIONS[i]!;
+          const isSelected = i === selectedIndex;
+          const prefix = isSelected ? " → " : "   ";
           const keyHint = theme.fg("accent", `[${option.key}]`);
           let label = option.label;
-          if (option.hint) label += `  ${theme.fg("dim", option.hint)}`;
+
+          if (editing && isSelected && isAllowOption(option)) {
+            const separator = " ";
+            const inputWidth = Math.max(
+              1,
+              width - visibleWidth(`${prefix}${keyHint} ${label}${separator}`),
+            );
+            label += `${separator}${theme.fg("accent", input.render(inputWidth)[0] ?? "")}`;
+          } else if (option.hint) {
+            label += `  ${theme.fg("dim", option.hint)}`;
+          }
           if (pendingAction === option.action) {
             label += `  ${theme.fg("warning", "→ press Enter to confirm")}`;
           }
           lines.push(truncateToWidth(`${prefix}${keyHint} ${label}`, width));
+          if (editing && isSelected && error) {
+            lines.push(truncateToWidth(theme.fg("error", `   ✗ ${error}`), width));
+          }
         }
         lines.push("");
-        const footer = pendingAction
-          ? "↑↓ navigate  enter confirm  esc cancel"
-          : "↑↓ navigate  enter select  esc/ctrl+c cancel";
+        const footer = editing
+          ? "↑↓ navigate, enter confirm, esc reset, ctrl+c cancel"
+          : pendingAction
+            ? "↑↓ navigate, tab edit, enter confirm, esc/ctrl+c cancel"
+            : "↑↓ navigate, tab edit, enter select, esc/ctrl+c cancel";
         lines.push(truncateToWidth(theme.fg("dim", footer), width));
         return lines;
       },
       handleInput(data: string): void {
-        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+        if (matchesKey(data, Key.ctrl("c"))) {
           resolve("abort");
           return;
         }
+        if (editing) {
+          if (matchesKey(data, Key.escape)) {
+            stopEditing();
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, Key.enter)) {
+            resolve(selectedOption().action);
+            return;
+          }
+          if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+            const delta = matchesKey(data, Key.up) ? -1 : 1;
+            selectedIndex = Math.max(
+              0,
+              Math.min(PERMISSION_OPTIONS.length - 1, selectedIndex + delta),
+            );
+            pendingAction = null;
+            stopEditing();
+            tui.requestRender();
+            return;
+          }
+          input.handleInput(data);
+          error = null;
+          tui.requestRender();
+          return;
+        }
+        if (matchesKey(data, Key.escape)) {
+          resolve("abort");
+          return;
+        }
+        if (matchesKey(data, Key.tab) && isAllowOption(selectedOption())) {
+          beginEditing();
+          tui.requestRender();
+          return;
+        }
         if (matchesKey(data, Key.enter)) {
-          resolve(pendingAction ?? PERMISSION_OPTIONS[selectedIndex]?.action ?? "abort");
+          resolve(pendingAction ?? selectedOption().action);
           return;
         }
         if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
@@ -86,7 +191,7 @@ export async function showPermissionPrompt(
           return;
         }
         for (let i = 0; i < PERMISSION_OPTIONS.length; i++) {
-          const option = PERMISSION_OPTIONS[i];
+          const option = PERMISSION_OPTIONS[i]!;
           if (data === option.key) {
             resolve(option.action);
             return;
@@ -103,26 +208,54 @@ export async function showPermissionPrompt(
           }
         }
       },
-      invalidate(): void {},
+      invalidate(): void {
+        input.invalidate();
+      },
     };
   });
 
-  return result ?? "abort";
+  return result ?? { action: "abort", value: originalValue };
 }
+
+const validRule = (value: string, matches: boolean, target: string): string | null => {
+  if (value.length === 0) return "Rule cannot be empty.";
+  return matches ? null : `Rule must match the blocked ${target}.`;
+};
 
 export function promptDomainBlock(
   ctx: ExtensionContext,
   domain: string,
-): Promise<PermissionChoice> {
-  return showPermissionPrompt(ctx, `🌐 Network blocked: "${domain}" is not in allowedDomains`);
+): Promise<PermissionPromptResult> {
+  return showPermissionPrompt(
+    ctx,
+    `🌐 Network blocked: "${domain}" is not in allowedDomains`,
+    domain,
+    (value) => validRule(value, domainIsAllowed(domain, [value]), `domain "${domain}"`),
+  );
 }
 
-export function promptReadBlock(ctx: ExtensionContext, path: string): Promise<PermissionChoice> {
-  return showPermissionPrompt(ctx, `📖 Read blocked: "${path}" is not in allowRead`);
+export function promptReadBlock(
+  ctx: ExtensionContext,
+  path: string,
+): Promise<PermissionPromptResult> {
+  return showPermissionPrompt(
+    ctx,
+    `📖 Read blocked: "${path}" is not in allowRead`,
+    path,
+    (value) => validRule(value, matchesPattern(path, [value]), `path "${path}"`),
+  );
 }
 
-export function promptWriteBlock(ctx: ExtensionContext, path: string): Promise<PermissionChoice> {
-  return showPermissionPrompt(ctx, `📝 Write blocked: "${path}" is not in allowWrite`);
+export function promptWriteBlock(
+  ctx: ExtensionContext,
+  path: string,
+): Promise<PermissionPromptResult> {
+  return showPermissionPrompt(
+    ctx,
+    `📝 Write blocked: "${path}" is not in allowWrite`,
+    path,
+    (value) => validRule(value, matchesPattern(path, [value]), `path "${path}"`),
+  );
 }
 
 export function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxConfig): void {
