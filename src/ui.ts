@@ -1,4 +1,4 @@
-import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import { type SandboxConfig } from "./config.ts";
@@ -40,12 +40,15 @@ const PERMISSION_OPTIONS: PromptOption[] = [
 ];
 
 export async function showPermissionPrompt(
+  pi: ExtensionAPI,
   ctx: ExtensionContext,
   title: string,
   originalValue: string,
   validateValue: (value: string) => string | null,
 ): Promise<PermissionPromptResult> {
   if (!ctx.hasUI) return { action: "abort", value: originalValue };
+
+  pi.events.emit("request-attention", { message: "Sandbox permission required" });
 
   const result = await ctx.ui.custom<PermissionPromptResult>((tui, theme, _kb, done) => {
     const input = new Input();
@@ -223,10 +226,12 @@ const validRule = (value: string, matches: boolean, target: string): string | nu
 };
 
 export function promptDomainBlock(
+  pi: ExtensionAPI,
   ctx: ExtensionContext,
   domain: string,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
+    pi,
     ctx,
     `🌐 Network blocked: "${domain}" is not in allowedDomains`,
     domain,
@@ -235,10 +240,12 @@ export function promptDomainBlock(
 }
 
 export function promptReadBlock(
+  pi: ExtensionAPI,
   ctx: ExtensionContext,
   path: string,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
+    pi,
     ctx,
     `📖 Read blocked: "${path}" is not in allowRead`,
     path,
@@ -247,10 +254,12 @@ export function promptReadBlock(
 }
 
 export function promptWriteBlock(
+  pi: ExtensionAPI,
   ctx: ExtensionContext,
   path: string,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
+    pi,
     ctx,
     `📝 Write blocked: "${path}" is not in allowWrite`,
     path,
