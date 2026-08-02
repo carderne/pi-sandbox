@@ -169,7 +169,12 @@ export default function (pi: ExtensionAPI) {
         const blockedPath = extractBlockedWritePath(output);
 
         if (blockedPath) {
-          const choice = await promptWriteBlock(pi, ctx, blockedPath);
+          const choice = await promptWriteBlock(
+            pi,
+            ctx,
+            blockedPath,
+            loadConfig(ctx.cwd).permissionPromptTimeoutSeconds,
+          );
           if (choice.action !== "abort") {
             await applyChoice(choice.action, "write", choice.value, ctx.cwd);
             const config = loadConfig(ctx.cwd);
@@ -202,9 +207,15 @@ export default function (pi: ExtensionAPI) {
   pi.on("user_bash", async (event, ctx) => {
     if (!sandboxEnabled || !sandboxInitialized) return;
 
+    const config = loadConfig(ctx.cwd);
     for (const domain of extractDomainsFromCommand(event.command)) {
       if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
-        const choice = await promptDomainBlock(pi, ctx, domain);
+        const choice = await promptDomainBlock(
+          pi,
+          ctx,
+          domain,
+          config.permissionPromptTimeoutSeconds,
+        );
         if (choice.action === "abort") {
           return {
             result: {
@@ -230,7 +241,12 @@ export default function (pi: ExtensionAPI) {
     if (sandboxInitialized && isToolCallEventType("bash", event)) {
       for (const domain of extractDomainsFromCommand(event.input.command)) {
         if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
-          const choice = await promptDomainBlock(pi, ctx, domain);
+          const choice = await promptDomainBlock(
+            pi,
+            ctx,
+            domain,
+            config.permissionPromptTimeoutSeconds,
+          );
           if (choice.action === "abort") {
             return {
               block: true,
@@ -245,7 +261,7 @@ export default function (pi: ExtensionAPI) {
     if (isToolCallEventType("read", event)) {
       const path = canonicalizePath(event.input.path);
       if (!matchesPattern(path, effectiveReadPaths(ctx.cwd))) {
-        const choice = await promptReadBlock(pi, ctx, path);
+        const choice = await promptReadBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
         if (choice.action === "abort") {
           return { block: true, reason: `Sandbox: read access denied for "${path}"` };
         }
@@ -266,7 +282,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
       if (shouldPromptForWrite(path, effectiveWritePaths(ctx.cwd), matchesPattern)) {
-        const choice = await promptWriteBlock(pi, ctx, path);
+        const choice = await promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
         if (choice.action === "abort") {
           return {
             block: true,
@@ -346,6 +362,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const target = kind === "domain" ? targetArg : canonicalizePath(targetArg);
+      const config = loadConfig(ctx.cwd);
       const configKey =
         kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
       const choice = await showPermissionPrompt(
@@ -359,6 +376,7 @@ export default function (pi: ExtensionAPI) {
             kind === "domain" ? domainIsAllowed(target, [value]) : matchesPattern(target, [value]);
           return matches ? null : `Rule must match "${target}".`;
         },
+        config.permissionPromptTimeoutSeconds,
       );
       if (choice.action === "abort") {
         ctx.ui.notify("Allow cancelled", "info");

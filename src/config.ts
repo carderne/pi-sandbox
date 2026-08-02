@@ -7,6 +7,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
   enabled?: boolean;
+  permissionPromptTimeoutSeconds?: number;
   network?: NonNullable<SandboxRuntimeConfig["network"]> & {
     allowUnauthenticatedSocksProxy?: boolean;
   };

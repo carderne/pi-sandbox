@@ -20,6 +20,19 @@ interface PromptOption {
   hint?: string;
 }
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+export function permissionPromptTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return undefined;
+  }
+  return Math.min(timeoutSeconds * 1000, MAX_TIMER_DELAY_MS);
+}
+
 const PERMISSION_OPTIONS: PromptOption[] = [
   { label: "Allow for this session only", key: "s", action: "session" },
   { label: "Abort (keep blocked)", key: "esc", action: "abort" },
@@ -45,11 +58,13 @@ export async function showPermissionPrompt(
   title: string,
   originalValue: string,
   validateValue: (value: string) => string | null,
+  timeoutSeconds?: number,
 ): Promise<PermissionPromptResult> {
   if (!ctx.hasUI) return { action: "abort", value: originalValue };
 
   pi.events.emit("request-attention", { message: "Sandbox permission required" });
 
+  const timeoutMs = permissionPromptTimeoutMs(timeoutSeconds);
   const result = await ctx.ui.custom<PermissionPromptResult>((tui, theme, _kb, done) => {
     const input = new Input();
     let selectedIndex = 0;
@@ -57,6 +72,20 @@ export async function showPermissionPrompt(
     let editing = false;
     let componentFocused = false;
     let error: string | null = null;
+    let resolved = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    const clearPromptTimeout = (): void => {
+      if (timeout === undefined) return;
+      clearTimeout(timeout);
+      timeout = undefined;
+    };
+    const finish = (result: PermissionPromptResult): void => {
+      if (resolved) return;
+      resolved = true;
+      clearPromptTimeout();
+      done(result);
+    };
 
     const selectedOption = (): PromptOption =>
       PERMISSION_OPTIONS[selectedIndex] ?? PERMISSION_OPTIONS[0]!;
@@ -79,7 +108,7 @@ export async function showPermissionPrompt(
     };
     const resolve = (action: PermissionChoice): void => {
       if (action === "abort") {
-        done({ action, value: originalValue });
+        finish({ action, value: originalValue });
         return;
       }
 
@@ -92,8 +121,12 @@ export async function showPermissionPrompt(
         tui.requestRender();
         return;
       }
-      done({ action, value });
+      finish({ action, value });
     };
+
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(() => resolve("abort"), timeoutMs);
+    }
 
     return {
       get focused(): boolean {
@@ -214,6 +247,9 @@ export async function showPermissionPrompt(
       invalidate(): void {
         input.invalidate();
       },
+      dispose(): void {
+        clearPromptTimeout();
+      },
     };
   });
 
@@ -229,6 +265,7 @@ export function promptDomainBlock(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   domain: string,
+  timeoutSeconds?: number,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
     pi,
@@ -236,6 +273,7 @@ export function promptDomainBlock(
     `🌐 Network blocked: "${domain}" is not in allowedDomains`,
     domain,
     (value) => validRule(value, domainIsAllowed(domain, [value]), `domain "${domain}"`),
+    timeoutSeconds,
   );
 }
 
@@ -243,6 +281,7 @@ export function promptReadBlock(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   path: string,
+  timeoutSeconds?: number,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
     pi,
@@ -250,6 +289,7 @@ export function promptReadBlock(
     `📖 Read blocked: "${path}" is not in allowRead`,
     path,
     (value) => validRule(value, matchesPattern(path, [value]), `path "${path}"`),
+    timeoutSeconds,
   );
 }
 
@@ -257,6 +297,7 @@ export function promptWriteBlock(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   path: string,
+  timeoutSeconds?: number,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
     pi,
@@ -264,6 +305,7 @@ export function promptWriteBlock(
     `📝 Write blocked: "${path}" is not in allowWrite`,
     path,
     (value) => validRule(value, matchesPattern(path, [value]), `path "${path}"`),
+    timeoutSeconds,
   );
 }
 
