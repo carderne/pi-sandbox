@@ -33,6 +33,10 @@ export function permissionPromptTimeoutMs(timeoutSeconds: unknown): number | und
   return Math.min(timeoutSeconds * 1000, MAX_TIMER_DELAY_MS);
 }
 
+export function permissionPromptRemainingSeconds(deadlineMs: number, nowMs = Date.now()): number {
+  return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
+}
+
 const PERMISSION_OPTIONS: PromptOption[] = [
   { label: "Allow for this session only", key: "s", action: "session" },
   { label: "Abort (keep blocked)", key: "esc", action: "abort" },
@@ -73,17 +77,24 @@ export async function showPermissionPrompt(
     let componentFocused = false;
     let error: string | null = null;
     let resolved = false;
+    let remainingSeconds: number | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let countdown: ReturnType<typeof setInterval> | undefined;
 
-    const clearPromptTimeout = (): void => {
-      if (timeout === undefined) return;
-      clearTimeout(timeout);
-      timeout = undefined;
+    const clearPromptTimers = (): void => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      if (countdown !== undefined) {
+        clearInterval(countdown);
+        countdown = undefined;
+      }
     };
     const finish = (result: PermissionPromptResult): void => {
       if (resolved) return;
       resolved = true;
-      clearPromptTimeout();
+      clearPromptTimers();
       done(result);
     };
 
@@ -125,7 +136,18 @@ export async function showPermissionPrompt(
     };
 
     if (timeoutMs !== undefined) {
+      const deadlineMs = Date.now() + timeoutMs;
+      remainingSeconds = permissionPromptRemainingSeconds(deadlineMs);
       timeout = setTimeout(() => resolve("abort"), timeoutMs);
+      countdown = setInterval(
+        () => {
+          const nextRemainingSeconds = permissionPromptRemainingSeconds(deadlineMs);
+          if (nextRemainingSeconds === remainingSeconds) return;
+          remainingSeconds = nextRemainingSeconds;
+          tui.requestRender();
+        },
+        Math.min(1000, timeoutMs),
+      );
     }
 
     return {
@@ -137,7 +159,19 @@ export async function showPermissionPrompt(
         updateFocus();
       },
       render(width: number): string[] {
-        const lines = [truncateToWidth(theme.fg("warning", title), width), ""];
+        const lines = [truncateToWidth(theme.fg("warning", title), width)];
+        if (remainingSeconds !== undefined) {
+          lines.push(
+            truncateToWidth(
+              theme.fg(
+                "warning",
+                `⏳ Auto-abort in ${remainingSeconds}s (permission stays blocked)`,
+              ),
+              width,
+            ),
+          );
+        }
+        lines.push("");
         for (let i = 0; i < PERMISSION_OPTIONS.length; i++) {
           const option = PERMISSION_OPTIONS[i]!;
           const isSelected = i === selectedIndex;
@@ -248,7 +282,7 @@ export async function showPermissionPrompt(
         input.invalidate();
       },
       dispose(): void {
-        clearPromptTimeout();
+        clearPromptTimers();
       },
     };
   });

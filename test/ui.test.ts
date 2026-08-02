@@ -3,7 +3,11 @@ import test from "node:test";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 
-import { permissionPromptTimeoutMs, showPermissionPrompt } from "../src/ui.ts";
+import {
+  permissionPromptRemainingSeconds,
+  permissionPromptTimeoutMs,
+  showPermissionPrompt,
+} from "../src/ui.ts";
 
 test("permissionPromptTimeoutMs enables only positive finite timeouts", () => {
   assert.equal(permissionPromptTimeoutMs(undefined), undefined);
@@ -16,11 +20,21 @@ test("permissionPromptTimeoutMs enables only positive finite timeouts", () => {
   assert.equal(permissionPromptTimeoutMs(Number.MAX_VALUE), 2_147_483_647);
 });
 
+test("permissionPromptRemainingSeconds rounds up and stops at zero", () => {
+  const deadlineMs = 10_000;
+  assert.equal(permissionPromptRemainingSeconds(deadlineMs, 7_000), 3);
+  assert.equal(permissionPromptRemainingSeconds(deadlineMs, 7_001), 3);
+  assert.equal(permissionPromptRemainingSeconds(deadlineMs, 8_000), 2);
+  assert.equal(permissionPromptRemainingSeconds(deadlineMs, 9_999), 1);
+  assert.equal(permissionPromptRemainingSeconds(deadlineMs, 10_000), 0);
+  assert.equal(permissionPromptRemainingSeconds(deadlineMs, 11_000), 0);
+});
+
 test(
   "showPermissionPrompt safely aborts when its timeout expires",
   { timeout: 1_000 },
   async () => {
-    type TestComponent = { dispose?(): void };
+    type TestComponent = { render(width: number): string[]; dispose?(): void };
     type PromptFactory<T> = (
       tui: { requestRender(): void },
       theme: { fg(color: string, text: string): string },
@@ -28,6 +42,7 @@ test(
       done: (result: T) => void,
     ) => TestComponent;
 
+    let renderedLines: string[] = [];
     const pi = {
       events: { emit: () => undefined },
     } as unknown as ExtensionAPI;
@@ -47,6 +62,7 @@ test(
               {},
               done,
             );
+            renderedLines = component.render(80);
           }),
       },
     } as unknown as ExtensionContext;
@@ -60,6 +76,7 @@ test(
       0.001,
     );
 
+    assert.ok(renderedLines.includes("⏳ Auto-abort in 1s (permission stays blocked)"));
     assert.deepEqual(result, { action: "abort", value: "example.test" });
   },
 );
