@@ -9,8 +9,8 @@ import {
   showPermissionPrompt,
 } from "../src/ui.ts";
 
-test("permissionPromptTimeoutMs enables only positive finite timeouts", () => {
-  assert.equal(permissionPromptTimeoutMs(undefined), undefined);
+test("permissionPromptTimeoutMs defaults omission and enables only positive finite timeouts", () => {
+  assert.equal(permissionPromptTimeoutMs(undefined), 600_000);
   assert.equal(permissionPromptTimeoutMs(0), undefined);
   assert.equal(permissionPromptTimeoutMs(-1), undefined);
   assert.equal(permissionPromptTimeoutMs(Number.NaN), undefined);

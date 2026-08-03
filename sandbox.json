@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "permissionPromptTimeoutSeconds": 0,
+  "permissionPromptTimeoutSeconds": 600,
   "allowBrowserProcess": true,
   "network": {
     "allowLocalBinding": true,

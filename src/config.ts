@@ -21,8 +21,11 @@ export type SandboxConfigFile = Omit<Partial<SandboxConfig>, "network" | "filesy
   filesystem?: Partial<FilesystemConfig>;
 };
 
+export const DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS = 10 * 60;
+
 export const DEFAULT_CONFIG: SandboxConfig = {
   enabled: true,
+  permissionPromptTimeoutSeconds: DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
   network: {
     allowUnauthenticatedSocksProxy: process.platform === "darwin",
     allowedDomains: [

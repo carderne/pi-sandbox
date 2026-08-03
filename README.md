@@ -71,7 +71,7 @@ Note below that the order of precedence for filesystem read and write are opposi
 ```json
 {
   "enabled": true,
-  "permissionPromptTimeoutSeconds": 0, // Positive values auto-abort; 0 waits indefinitely
+  "permissionPromptTimeoutSeconds": 600, // Defaults to 10 minutes; 0 waits indefinitely
   "allowBrowserProcess": true,     // If you want to use agent-browser or similar Chrome setup
   "network": {
     "allowLocalBinding": true,     // ditto
@@ -120,10 +120,10 @@ checked against the same filesystem policy. The OS-level sandbox cannot cover
 these tools because they run directly in the Node.js process rather than in a
 subprocess.
 
-When a block is triggered, a prompt appears with four options. Set
-`permissionPromptTimeoutSeconds` to a positive number to automatically select
-**Abort (keep blocked)** when that many seconds elapse. Omit it or set it to `0`
-to wait indefinitely. A timeout never grants permission.
+When a block is triggered, a prompt appears with four options. Permission prompts
+automatically select **Abort (keep blocked)** after 10 minutes by default. Set
+`permissionPromptTimeoutSeconds` to a positive number to use a different timeout,
+or set it to `0` to wait indefinitely. A timeout never grants permission.
 
 - Abort (keep blocked)
 - Allow for this session only

@@ -1,7 +1,7 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-import { type SandboxConfig } from "./config.ts";
+import { DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS, type SandboxConfig } from "./config.ts";
 import { allowsAllDomains, domainIsAllowed, matchesPattern } from "./policy.ts";
 import { type SessionAllowances } from "./sandbox-runtime.ts";
 
@@ -23,14 +23,16 @@ interface PromptOption {
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export function permissionPromptTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  const resolvedTimeoutSeconds =
+    timeoutSeconds === undefined ? DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS : timeoutSeconds;
   if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds <= 0
+    typeof resolvedTimeoutSeconds !== "number" ||
+    !Number.isFinite(resolvedTimeoutSeconds) ||
+    resolvedTimeoutSeconds <= 0
   ) {
     return undefined;
   }
-  return Math.min(timeoutSeconds * 1000, MAX_TIMER_DELAY_MS);
+  return Math.min(resolvedTimeoutSeconds * 1000, MAX_TIMER_DELAY_MS);
 }
 
 export function permissionPromptRemainingSeconds(deadlineMs: number, nowMs = Date.now()): number {
