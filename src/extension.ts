@@ -5,6 +5,7 @@ import {
   isToolCallEventType,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { Key } from "@earendil-works/pi-tui";
 
 import {
   addDomainToConfig,
@@ -102,6 +103,11 @@ export default function (pi: ExtensionAPI) {
     ctx: Parameters<typeof warnIfAllDomainsAllowed>[0],
     setProxyEnvironment: boolean,
   ): Promise<boolean> {
+    if (sandboxEnabled) {
+      ctx.ui.notify("Sandbox is already enabled", "info");
+      return false;
+    }
+
     const config = loadConfig(ctx.cwd);
     const platform = process.platform;
     if (platform !== "darwin" && platform !== "linux") {
@@ -127,6 +133,35 @@ export default function (pi: ExtensionAPI) {
       );
       return false;
     }
+  }
+
+  async function disableSandbox(
+    ctx: Parameters<typeof warnIfAllDomainsAllowed>[0],
+  ): Promise<boolean> {
+    if (!sandboxEnabled) {
+      ctx.ui.notify("Sandbox is already disabled", "info");
+      return false;
+    }
+
+    if (sandboxInitialized) {
+      try {
+        await SandboxManager.reset();
+      } catch {
+        // Ignore cleanup errors.
+      }
+    }
+    sandboxEnabled = false;
+    sandboxInitialized = false;
+    ctx.ui.setStatus("sandbox", "");
+    return true;
+  }
+
+  async function toggleSandbox(ctx: Parameters<typeof warnIfAllDomainsAllowed>[0]): Promise<void> {
+    if (sandboxEnabled) {
+      if (await disableSandbox(ctx)) ctx.ui.notify("Sandbox disabled", "info");
+      return;
+    }
+    if (await enableSandbox(ctx, false)) ctx.ui.notify("Sandbox enabled", "info");
   }
 
   pi.registerTool({
@@ -318,13 +353,14 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  pi.registerShortcut(Key.alt("s"), {
+    description: "Toggle sandbox on/off for this session",
+    handler: toggleSandbox,
+  });
+
   pi.registerCommand("sandbox-enable", {
     description: "Enable the sandbox for this session",
     handler: async (_args, ctx) => {
-      if (sandboxEnabled) {
-        ctx.ui.notify("Sandbox is already enabled", "info");
-        return;
-      }
       if (await enableSandbox(ctx, false)) ctx.ui.notify("Sandbox enabled", "info");
     },
   });
@@ -332,21 +368,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("sandbox-disable", {
     description: "Disable the sandbox for this session",
     handler: async (_args, ctx) => {
-      if (!sandboxEnabled) {
-        ctx.ui.notify("Sandbox is already disabled", "info");
-        return;
-      }
-      if (sandboxInitialized) {
-        try {
-          await SandboxManager.reset();
-        } catch {
-          // Ignore cleanup errors.
-        }
-      }
-      sandboxEnabled = false;
-      sandboxInitialized = false;
-      ctx.ui.setStatus("sandbox", "");
-      ctx.ui.notify("Sandbox disabled", "info");
+      if (await disableSandbox(ctx)) ctx.ui.notify("Sandbox disabled", "info");
     },
   });
 
