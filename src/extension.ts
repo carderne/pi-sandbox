@@ -140,7 +140,7 @@ export default function (pi: ExtensionAPI) {
         return createBashToolDefinition(localCwd, {
           operations: createSandboxedBashOps(
             userShellPath,
-            loadConfig(localCwd).network?.sshProxy !== false,
+            loadConfig(ctx.cwd).network?.sshProxy !== false,
           ),
           shellPath: userShellPath,
         }).execute(id, params, signal, onUpdate, ctx);
@@ -235,7 +235,7 @@ export default function (pi: ExtensionAPI) {
     return {
       operations: createSandboxedBashOps(
         userShellPath,
-        loadConfig(localCwd).network?.sshProxy !== false,
+        loadConfig(ctx.cwd).network?.sshProxy !== false,
       ),
     };
   });
