@@ -108,10 +108,7 @@ export function extractBlockedWritePath(output: string): string | null {
   return match ? match[1] : null;
 }
 
-export function createSandboxedBashOps(
-  shellPath?: string,
-  sshProxy = true,
-): BashOperations {
+export function createSandboxedBashOps(shellPath?: string, sshProxy = true): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
       if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
@@ -122,8 +119,7 @@ export function createSandboxedBashOps(
       // the sandbox network proxy. Install a shell function so ordinary
       // `ssh host` commands use the runtime's local SOCKS proxy too. This is
       // deliberately opt-in at the config layer, but enabled by default.
-      const socksProxyPort =
-        sshProxy ? SandboxManager.getSocksProxyPort() : undefined;
+      const socksProxyPort = sshProxy ? SandboxManager.getSocksProxyPort() : undefined;
       const sshProxyCommand =
         process.platform === "darwin" && socksProxyPort !== undefined
           ? `ssh() { /usr/bin/ssh -o 'ProxyCommand=/usr/bin/nc -X 5 -x localhost:${socksProxyPort} %h %p' "$@"; }; `
