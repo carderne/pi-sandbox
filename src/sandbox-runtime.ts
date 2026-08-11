@@ -108,13 +108,30 @@ export function extractBlockedWritePath(output: string): string | null {
   return match ? match[1] : null;
 }
 
-export function createSandboxedBashOps(shellPath?: string): BashOperations {
+export function createSandboxedBashOps(
+  shellPath?: string,
+  sshProxy = true,
+): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
       if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
 
       const { shell, args } = getShellConfig(shellPath);
-      const wrappedCommand = await SandboxManager.wrapWithSandbox(command, shell);
+
+      // OpenSSH does not honor ALL_PROXY, unlike most of the tools that use
+      // the sandbox network proxy. Install a shell function so ordinary
+      // `ssh host` commands use the runtime's local SOCKS proxy too. This is
+      // deliberately opt-in at the config layer, but enabled by default.
+      const socksProxyPort =
+        sshProxy ? SandboxManager.getSocksProxyPort() : undefined;
+      const sshProxyCommand =
+        process.platform === "darwin" && socksProxyPort !== undefined
+          ? `ssh() { /usr/bin/ssh -o 'ProxyCommand=/usr/bin/nc -X 5 -x localhost:${socksProxyPort} %h %p' "$@"; }; `
+          : "";
+      const wrappedCommand = await SandboxManager.wrapWithSandbox(
+        `${sshProxyCommand}${command}`,
+        shell,
+      );
 
       return new Promise((resolve, reject) => {
         const child = spawn(shell, [...args, wrappedCommand], {

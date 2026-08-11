@@ -138,7 +138,10 @@ export default function (pi: ExtensionAPI) {
           return localBash.execute(id, params, signal, onUpdate, ctx);
         }
         return createBashToolDefinition(localCwd, {
-          operations: createSandboxedBashOps(userShellPath),
+          operations: createSandboxedBashOps(
+            userShellPath,
+            loadConfig(localCwd).network?.sshProxy !== false,
+          ),
           shellPath: userShellPath,
         }).execute(id, params, signal, onUpdate, ctx);
       };
@@ -229,7 +232,12 @@ export default function (pi: ExtensionAPI) {
         await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
       }
     }
-    return { operations: createSandboxedBashOps(userShellPath) };
+    return {
+      operations: createSandboxedBashOps(
+        userShellPath,
+        loadConfig(localCwd).network?.sshProxy !== false,
+      ),
+    };
   });
 
   pi.on("tool_call", async (event, ctx) => {

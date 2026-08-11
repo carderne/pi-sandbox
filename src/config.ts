@@ -10,6 +10,8 @@ export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
   permissionPromptTimeoutSeconds?: number;
   network?: NonNullable<SandboxRuntimeConfig["network"]> & {
     allowUnauthenticatedSocksProxy?: boolean;
+    /** Route ordinary `ssh` commands through the sandbox SOCKS proxy. */
+    sshProxy?: boolean;
   };
 };
 
@@ -28,6 +30,7 @@ export const DEFAULT_CONFIG: SandboxConfig = {
   permissionPromptTimeoutSeconds: DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
   network: {
     allowUnauthenticatedSocksProxy: process.platform === "darwin",
+    sshProxy: true,
     allowedDomains: [
       "npmjs.org",
       "*.npmjs.org",
