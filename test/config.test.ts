@@ -11,6 +11,7 @@ import {
   addWritePathToConfig,
   DEFAULT_CONFIG,
   DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
+  getConfigPaths,
   mergeConfigLayers,
 } from "../src/config.ts";
 
@@ -93,6 +94,20 @@ test("mergeConfigLayers uses defaults only for arrays not configured by either f
   assert.deepEqual(merged.filesystem?.allowWrite, []);
   assert.deepEqual(merged.filesystem?.allowRead, DEFAULT_CONFIG.filesystem?.allowRead);
   assert.deepEqual(merged.network?.allowedDomains, DEFAULT_CONFIG.network?.allowedDomains);
+});
+
+test("getConfigPaths uses Pi's configured agent directory", () => {
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = "/tmp/custom-pi-agent";
+  try {
+    assert.deepEqual(getConfigPaths("/workspace"), {
+      globalPath: "/tmp/custom-pi-agent/sandbox.json",
+      projectPath: "/workspace/.pi/sandbox.json",
+    });
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
 });
 
 test("permission writers only persist the property being changed", () => {

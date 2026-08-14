@@ -1,7 +1,11 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-import { DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS, type SandboxConfig } from "./config.ts";
+import {
+  DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
+  getConfigPaths,
+  type SandboxConfig,
+} from "./config.ts";
 import { allowsAllDomains, domainIsAllowed, matchesPattern } from "./policy.ts";
 import { type SessionAllowances } from "./sandbox-runtime.ts";
 
@@ -39,24 +43,27 @@ export function permissionPromptRemainingSeconds(deadlineMs: number, nowMs = Dat
   return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
 }
 
-const PERMISSION_OPTIONS: PromptOption[] = [
-  { label: "Allow for this session only", key: "s", action: "session" },
-  { label: "Abort (keep blocked)", key: "esc", action: "abort" },
-  {
-    label: "Allow for this project",
-    key: "P",
-    action: "project",
-    confirm: true,
-    hint: "→ .pi/sandbox.json",
-  },
-  {
-    label: "Allow for all projects",
-    key: "A",
-    action: "global",
-    confirm: true,
-    hint: "→ ~/.pi/agent/sandbox.json",
-  },
-];
+export function permissionOptions(cwd: string): PromptOption[] {
+  const { globalPath, projectPath } = getConfigPaths(cwd);
+  return [
+    { label: "Allow for this session only", key: "s", action: "session" },
+    { label: "Abort (keep blocked)", key: "esc", action: "abort" },
+    {
+      label: "Allow for this project",
+      key: "P",
+      action: "project",
+      confirm: true,
+      hint: `→ ${projectPath}`,
+    },
+    {
+      label: "Allow for all projects",
+      key: "A",
+      action: "global",
+      confirm: true,
+      hint: `→ ${globalPath}`,
+    },
+  ];
+}
 
 export async function showPermissionPrompt(
   pi: ExtensionAPI,
@@ -71,6 +78,7 @@ export async function showPermissionPrompt(
   pi.events.emit("request-attention", { message: "Sandbox permission required" });
 
   const timeoutMs = permissionPromptTimeoutMs(timeoutSeconds);
+  const options = permissionOptions(ctx.cwd);
   const result = await ctx.ui.custom<PermissionPromptResult>((tui, theme, _kb, done) => {
     const input = new Input();
     let selectedIndex = 0;
@@ -100,8 +108,7 @@ export async function showPermissionPrompt(
       done(result);
     };
 
-    const selectedOption = (): PromptOption =>
-      PERMISSION_OPTIONS[selectedIndex] ?? PERMISSION_OPTIONS[0]!;
+    const selectedOption = (): PromptOption => options[selectedIndex] ?? options[0]!;
     const isAllowOption = (option: PromptOption): boolean => option.action !== "abort";
     const updateFocus = (): void => {
       input.focused = componentFocused && editing;
@@ -174,8 +181,8 @@ export async function showPermissionPrompt(
           );
         }
         lines.push("");
-        for (let i = 0; i < PERMISSION_OPTIONS.length; i++) {
-          const option = PERMISSION_OPTIONS[i]!;
+        for (let i = 0; i < options.length; i++) {
+          const option = options[i]!;
           const isSelected = i === selectedIndex;
           const prefix = isSelected ? " → " : "   ";
           const keyHint = theme.fg("accent", `[${option.key}]`);
@@ -225,10 +232,7 @@ export async function showPermissionPrompt(
           }
           if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
             const delta = matchesKey(data, Key.up) ? -1 : 1;
-            selectedIndex = Math.max(
-              0,
-              Math.min(PERMISSION_OPTIONS.length - 1, selectedIndex + delta),
-            );
+            selectedIndex = Math.max(0, Math.min(options.length - 1, selectedIndex + delta));
             pendingAction = null;
             stopEditing();
             tui.requestRender();
@@ -254,16 +258,13 @@ export async function showPermissionPrompt(
         }
         if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
           const delta = matchesKey(data, Key.up) ? -1 : 1;
-          selectedIndex = Math.max(
-            0,
-            Math.min(PERMISSION_OPTIONS.length - 1, selectedIndex + delta),
-          );
+          selectedIndex = Math.max(0, Math.min(options.length - 1, selectedIndex + delta));
           pendingAction = null;
           tui.requestRender();
           return;
         }
-        for (let i = 0; i < PERMISSION_OPTIONS.length; i++) {
-          const option = PERMISSION_OPTIONS[i]!;
+        for (let i = 0; i < options.length; i++) {
+          const option = options[i]!;
           if (data === option.key) {
             resolve(option.action);
             return;

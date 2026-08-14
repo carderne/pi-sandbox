@@ -4,6 +4,7 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import assert from "node:assert/strict";
 
 import {
+  permissionOptions,
   permissionPromptRemainingSeconds,
   permissionPromptTimeoutMs,
   showPermissionPrompt,
@@ -18,6 +19,17 @@ test("permissionPromptTimeoutMs defaults omission and enables only positive fini
   assert.equal(permissionPromptTimeoutMs("30"), undefined);
   assert.equal(permissionPromptTimeoutMs(30), 30_000);
   assert.equal(permissionPromptTimeoutMs(Number.MAX_VALUE), 2_147_483_647);
+});
+
+test("permissionOptions displays Pi's configured global path", () => {
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = "/tmp/custom-pi-agent";
+  try {
+    assert.equal(permissionOptions("/workspace")[3]?.hint, "→ /tmp/custom-pi-agent/sandbox.json");
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  }
 });
 
 test("permissionPromptRemainingSeconds rounds up and stops at zero", () => {
@@ -47,6 +59,7 @@ test(
       events: { emit: () => undefined },
     } as unknown as ExtensionAPI;
     const ctx = {
+      cwd: "/workspace",
       hasUI: true,
       ui: {
         custom: <T>(factory: PromptFactory<T>): Promise<T> =>

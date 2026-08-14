@@ -60,7 +60,7 @@ pi install npm:pi-sandbox
 ```
 
 #### Configure
-Add a config like this either to `~/.pi/agent/sandbox.json` (global) or to `.pi/sandbox.json` (local).
+Add a config like this either to Pi's global agent directory (by default, `~/.pi/agent/sandbox.json`; respects `PI_CODING_AGENT_DIR`) or to `.pi/sandbox.json` (local).
 Scalar settings in the local config take precedence over global settings. The
 path and domain arrays from both files are combined and deduplicated, so a
 project can add permissions without repeating the global configuration. Built-in
@@ -129,7 +129,7 @@ or set it to `0` to wait indefinitely. A timeout never grants permission.
 - Abort (keep blocked)
 - Allow for this session only
 - Allow for this project — written to `.pi/sandbox.json`
-- Allow for all projects — written to `~/.pi/agent/sandbox.json`
+- Allow for all projects — written to Pi's global agent directory (by default, `~/.pi/agent/sandbox.json`; respects `PI_CODING_AGENT_DIR`)
 
 **Session allowances** are held in memory only. They are never written to disk
 and the agent has no way to read or modify them. They are reset when the
