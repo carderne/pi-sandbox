@@ -10,6 +10,12 @@ export function shouldPromptForWrite(
   return allowWrite.length === 0 || !matches(path, allowWrite);
 }
 
+export function decideWritePolicy(path: string, allowWrite: string[], denyWrite: string[]) {
+  if (matchesPattern(path, denyWrite)) return "deny";
+  if (allowWrite.length === 0 || !matchesPattern(path, allowWrite)) return "prompt";
+  return "allow";
+}
+
 export function extractDomainsFromCommand(command: string): string[] {
   const urlRegex = /https?:\/\/([a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
   const domains = new Set<string>();

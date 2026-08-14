@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   allowsAllDomains,
   canonicalizePath,
+  decideWritePolicy,
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
@@ -31,6 +32,13 @@ test("matches exact, wildcard, and all-domain policies", () => {
 test("empty allowWrite prompts securely", () => {
   assert.equal(shouldPromptForWrite("/tmp/file", [], matchesPattern), true);
   assert.equal(shouldPromptForWrite("/tmp/file", ["/tmp"], matchesPattern), false);
+});
+
+test("decides write policy from deny and allow lists", () => {
+  assert.equal(decideWritePolicy("/tmp/file", ["/tmp"], ["/tmp/file"]), "deny");
+  assert.equal(decideWritePolicy("/tmp/file", ["/tmp"], []), "allow");
+  assert.equal(decideWritePolicy("/tmp/file", ["/var"], []), "prompt");
+  assert.equal(decideWritePolicy("/tmp/file", [], []), "prompt");
 });
 
 test("path patterns support directory prefixes and globs", () => {

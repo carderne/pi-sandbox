@@ -16,10 +16,10 @@ import {
 } from "./config.ts";
 import {
   canonicalizePath,
+  decideWritePolicy,
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
-  shouldPromptForWrite,
 } from "./policy.ts";
 import {
   createSandboxedBashOps,
@@ -209,11 +209,15 @@ export default function (pi: ExtensionAPI) {
         if (blockedPath) {
           const path = canonicalizePath(blockedPath);
           const config = loadConfig(ctx.cwd);
-          const denyWrite = config.filesystem?.denyWrite ?? [];
-          if (matchesPattern(path, denyWrite)) {
+          const writePolicy = decideWritePolicy(
+            path,
+            effectiveWritePaths(ctx.cwd),
+            config.filesystem?.denyWrite ?? [],
+          );
+          if (writePolicy === "deny") {
             return result;
           }
-          if (shouldPromptForWrite(path, effectiveWritePaths(ctx.cwd), matchesPattern)) {
+          if (writePolicy === "prompt") {
             const choice = await promptWriteBlock(
               pi,
               ctx,
@@ -313,8 +317,12 @@ export default function (pi: ExtensionAPI) {
 
     if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
       const path = canonicalizePath((event.input as { path: string }).path);
-      const denyWrite = config.filesystem?.denyWrite ?? [];
-      if (matchesPattern(path, denyWrite)) {
+      const writePolicy = decideWritePolicy(
+        path,
+        effectiveWritePaths(ctx.cwd),
+        config.filesystem?.denyWrite ?? [],
+      );
+      if (writePolicy === "deny") {
         return {
           block: true,
           reason:
@@ -322,7 +330,7 @@ export default function (pi: ExtensionAPI) {
             `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
         };
       }
-      if (shouldPromptForWrite(path, effectiveWritePaths(ctx.cwd), matchesPattern)) {
+      if (writePolicy === "prompt") {
         const choice = await promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
         if (choice.action === "abort") {
           return {
