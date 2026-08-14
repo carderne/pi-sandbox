@@ -12,6 +12,7 @@ import {
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
+  resolveWritePermission,
 } from "../src/policy.ts";
 
 test("extracts and deduplicates literal HTTP domains", () => {
@@ -33,6 +34,70 @@ test("decides write policy from deny and allow lists", () => {
   assert.equal(decideWritePolicy("/tmp/file", ["/tmp"], []), "allow");
   assert.equal(decideWritePolicy("/tmp/file", ["/var"], []), "prompt");
   assert.equal(decideWritePolicy("/tmp/file", [], []), "prompt");
+});
+
+test("resolves write permission without prompting for denied or allowed paths", async () => {
+  const calls: string[] = [];
+  const prompt = async () => {
+    calls.push("prompt");
+    return { action: "session" as const, value: "/tmp" };
+  };
+  const apply = async () => {
+    calls.push("apply");
+  };
+
+  assert.deepEqual(
+    await resolveWritePermission({
+      path: "/tmp/file",
+      allowWrite: ["/tmp"],
+      denyWrite: ["/tmp/file"],
+      prompt,
+      saveWritePermission: apply,
+    }),
+    { action: "deny" },
+  );
+  assert.deepEqual(
+    await resolveWritePermission({
+      path: "/tmp/file",
+      allowWrite: ["/tmp"],
+      denyWrite: [],
+      prompt,
+      saveWritePermission: apply,
+    }),
+    { action: "allow" },
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("resolves write permission prompt choices", async () => {
+  const applied: string[] = [];
+  assert.deepEqual(
+    await resolveWritePermission({
+      path: "/tmp/file",
+      allowWrite: [],
+      denyWrite: [],
+      prompt: async () => ({ action: "abort", value: "/tmp/file" }),
+      saveWritePermission: async (choice, value) => {
+        applied.push(`${choice}:${value}`);
+      },
+    }),
+    { action: "abort", value: "/tmp/file" },
+  );
+  assert.deepEqual(applied.length, 0);
+
+  assert.deepEqual(
+    await resolveWritePermission({
+      path: "/tmp/file",
+      allowWrite: [],
+      denyWrite: [],
+      prompt: async () => ({ action: "session", value: "/tmp" }),
+      saveWritePermission: async (choice, value) => {
+        applied.push(`${choice}:${value}`);
+      },
+    }),
+    { action: "granted", value: "/tmp" },
+  );
+  assert.deepEqual(applied, ["session:/tmp"]);
 });
 
 test("path patterns support directory prefixes and globs", () => {

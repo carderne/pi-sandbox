@@ -16,10 +16,10 @@ import {
 } from "./config.ts";
 import {
   canonicalizePath,
-  decideWritePolicy,
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
+  resolveWritePermission,
 } from "./policy.ts";
 import {
   createSandboxedBashOps,
@@ -209,34 +209,32 @@ export default function (pi: ExtensionAPI) {
         if (blockedPath) {
           const path = canonicalizePath(blockedPath);
           const config = loadConfig(ctx.cwd);
-          const writePolicy = decideWritePolicy(
+          const writePermission = await resolveWritePermission({
             path,
-            effectiveWritePaths(ctx.cwd),
-            config.filesystem?.denyWrite ?? [],
-          );
-          if (writePolicy === "deny") {
+            allowWrite: effectiveWritePaths(ctx.cwd),
+            denyWrite: config.filesystem?.denyWrite ?? [],
+            prompt: (path) =>
+              promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
+            saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
+          });
+          if (writePermission.action === "deny") {
             return result;
           }
-          if (writePolicy === "prompt") {
-            const choice = await promptWriteBlock(
-              pi,
-              ctx,
-              path,
-              config.permissionPromptTimeoutSeconds,
-            );
-            if (choice.action !== "abort") {
-              await applyChoice(choice.action, "write", choice.value, ctx.cwd);
-              onUpdate?.({
-                content: [
-                  {
-                    type: "text",
-                    text: `\n--- Write access granted for "${choice.value}", retrying ---\n`,
-                  },
-                ],
-                details: {},
-              });
-              return runBash();
-            }
+          if (writePermission.action === "allow") {
+            await refreshSandbox(ctx.cwd);
+            return runBash();
+          }
+          if (writePermission.action === "granted") {
+            onUpdate?.({
+              content: [
+                {
+                  type: "text",
+                  text: `\n--- Write access granted for "${writePermission.value}", retrying ---\n`,
+                },
+              ],
+              details: {},
+            });
+            return runBash();
           }
         }
       }
@@ -317,12 +315,14 @@ export default function (pi: ExtensionAPI) {
 
     if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
       const path = canonicalizePath((event.input as { path: string }).path);
-      const writePolicy = decideWritePolicy(
+      const writePermission = await resolveWritePermission({
         path,
-        effectiveWritePaths(ctx.cwd),
-        config.filesystem?.denyWrite ?? [],
-      );
-      if (writePolicy === "deny") {
+        allowWrite: effectiveWritePaths(ctx.cwd),
+        denyWrite: config.filesystem?.denyWrite ?? [],
+        prompt: (path) => promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
+        saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
+      });
+      if (writePermission.action === "deny") {
         return {
           block: true,
           reason:
@@ -330,15 +330,13 @@ export default function (pi: ExtensionAPI) {
             `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
         };
       }
-      if (writePolicy === "prompt") {
-        const choice = await promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
-        if (choice.action === "abort") {
-          return {
-            block: true,
-            reason: `Sandbox: write access denied for "${path}" (not in allowWrite)`,
-          };
-        }
-        await applyChoice(choice.action, "write", choice.value, ctx.cwd);
+      if (writePermission.action === "abort") {
+        return {
+          block: true,
+          reason: `Sandbox: write access denied for "${path}" (not in allowWrite)`,
+        };
+      }
+      if (writePermission.action === "granted") {
         return;
       }
     }

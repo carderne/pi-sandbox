@@ -8,6 +8,32 @@ export function decideWritePolicy(path: string, allowWrite: string[], denyWrite:
   return "allow";
 }
 
+export async function resolveWritePermission({
+  path,
+  allowWrite,
+  denyWrite,
+  prompt,
+  saveWritePermission,
+}: {
+  path: string;
+  allowWrite: string[];
+  denyWrite: string[];
+  prompt: (path: string) => Promise<{
+    action: "abort" | "session" | "project" | "global";
+    value: string;
+  }>;
+  saveWritePermission: (choice: "session" | "project" | "global", value: string) => Promise<void>;
+}) {
+  const policy = decideWritePolicy(path, allowWrite, denyWrite);
+  if (policy !== "prompt") return { action: policy };
+
+  const choice = await prompt(path);
+  if (choice.action === "abort") return { action: "abort", value: choice.value };
+
+  await saveWritePermission(choice.action, choice.value);
+  return { action: "granted", value: choice.value };
+}
+
 export function extractDomainsFromCommand(command: string): string[] {
   const urlRegex = /https?:\/\/([a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
   const domains = new Set<string>();
