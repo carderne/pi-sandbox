@@ -207,34 +207,32 @@ export default function (pi: ExtensionAPI) {
         const blockedPath = extractBlockedWritePath(output);
 
         if (blockedPath) {
-          const choice = await promptWriteBlock(
-            pi,
-            ctx,
-            blockedPath,
-            loadConfig(ctx.cwd).permissionPromptTimeoutSeconds,
-          );
-          if (choice.action !== "abort") {
-            await applyChoice(choice.action, "write", choice.value, ctx.cwd);
-            const config = loadConfig(ctx.cwd);
-            const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
-            if (matchesPattern(blockedPath, config.filesystem?.denyWrite ?? [])) {
-              ctx.ui.notify(
-                `⚠️ "${choice.value}" was added to allowWrite, but "${blockedPath}" is also in denyWrite and will remain blocked.\n` +
-                  `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
-                "warning",
-              );
-              return result;
+          const path = canonicalizePath(blockedPath);
+          const config = loadConfig(ctx.cwd);
+          const denyWrite = config.filesystem?.denyWrite ?? [];
+          if (matchesPattern(path, denyWrite)) {
+            return result;
+          }
+          if (shouldPromptForWrite(path, effectiveWritePaths(ctx.cwd), matchesPattern)) {
+            const choice = await promptWriteBlock(
+              pi,
+              ctx,
+              path,
+              config.permissionPromptTimeoutSeconds,
+            );
+            if (choice.action !== "abort") {
+              await applyChoice(choice.action, "write", choice.value, ctx.cwd);
+              onUpdate?.({
+                content: [
+                  {
+                    type: "text",
+                    text: `\n--- Write access granted for "${choice.value}", retrying ---\n`,
+                  },
+                ],
+                details: {},
+              });
+              return runBash();
             }
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `\n--- Write access granted for "${choice.value}", retrying ---\n`,
-                },
-              ],
-              details: {},
-            });
-            return runBash();
           }
         }
       }
