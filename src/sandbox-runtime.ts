@@ -9,7 +9,7 @@ import {
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 
 import { type SandboxConfig } from "./config.ts";
-import { domainIsAllowed } from "./policy.ts";
+import { canonicalizePath, domainIsAllowed } from "./policy.ts";
 
 export interface SessionAllowances {
   domains: string[];
@@ -26,6 +26,12 @@ export interface EffectiveAllowances {
 function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
+
+const canonicalizeFilesystemPattern = (path: string) =>
+  path.includes("*") ? path : canonicalizePath(path);
+
+const canonicalizeFilesystemPatterns = (paths: string[]) =>
+  unique(paths.map(canonicalizeFilesystemPattern));
 
 export function resolveAllowances(
   config: SandboxConfig,
@@ -64,11 +70,11 @@ export function buildRuntimeConfig(
       deniedDomains: config.network?.deniedDomains ?? [],
     },
     filesystem: {
-      ...config.filesystem,
-      denyRead: config.filesystem?.denyRead ?? [],
-      allowRead: effective.readPaths,
-      allowWrite: effective.writePaths,
-      denyWrite: config.filesystem?.denyWrite ?? [],
+      disabled: config.filesystem?.disabled,
+      denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? []),
+      allowRead: canonicalizeFilesystemPatterns(effective.readPaths),
+      allowWrite: canonicalizeFilesystemPatterns(effective.writePaths),
+      denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? []),
     },
     ignoreViolations: config.ignoreViolations,
     enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,

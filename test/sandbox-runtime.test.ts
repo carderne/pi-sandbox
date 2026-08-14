@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
+import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
   extractBlockedWritePath,
@@ -21,6 +22,24 @@ test("buildRuntimeConfig adds session allowances without mutating config", () =>
   assert.equal(runtime.filesystem?.allowRead?.includes("/write"), true);
   assert.equal(runtime.filesystem?.allowWrite?.includes("/write"), true);
   assert.equal(DEFAULT_CONFIG.network?.allowedDomains?.includes("example.com"), false);
+});
+
+test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
+  const runtime = buildRuntimeConfig({
+    ...DEFAULT_CONFIG,
+    filesystem: {
+      ...DEFAULT_CONFIG.filesystem!,
+      denyRead: ["/tmp"],
+      allowRead: [],
+      allowWrite: ["/tmp"],
+      denyWrite: ["*.key"],
+    },
+  });
+
+  assert.deepEqual(runtime.filesystem?.denyRead, [canonicalizePath("/tmp")]);
+  assert.equal(runtime.filesystem?.allowRead?.includes(canonicalizePath("/tmp")), true);
+  assert.deepEqual(runtime.filesystem?.allowWrite, [canonicalizePath("/tmp")]);
+  assert.deepEqual(runtime.filesystem?.denyWrite, ["*.key"]);
 });
 
 test("resolveAllowances makes configured and session write paths readable", () => {
