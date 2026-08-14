@@ -2,14 +2,6 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 
-export function shouldPromptForWrite(
-  path: string,
-  allowWrite: string[],
-  matches: (path: string, patterns: string[]) => boolean,
-): boolean {
-  return allowWrite.length === 0 || !matches(path, allowWrite);
-}
-
 export function decideWritePolicy(path: string, allowWrite: string[], denyWrite: string[]) {
   if (matchesPattern(path, denyWrite)) return "deny";
   if (allowWrite.length === 0 || !matchesPattern(path, allowWrite)) return "prompt";

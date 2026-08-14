@@ -12,7 +12,6 @@ import {
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
-  shouldPromptForWrite,
 } from "../src/policy.ts";
 
 test("extracts and deduplicates literal HTTP domains", () => {
@@ -27,11 +26,6 @@ test("matches exact, wildcard, and all-domain policies", () => {
   assert.equal(domainIsAllowed("api.github.com", ["*.github.com"]), true);
   assert.equal(domainIsAllowed("notgithub.com", ["*.github.com"]), false);
   assert.equal(allowsAllDomains(["*"]), true);
-});
-
-test("empty allowWrite prompts securely", () => {
-  assert.equal(shouldPromptForWrite("/tmp/file", [], matchesPattern), true);
-  assert.equal(shouldPromptForWrite("/tmp/file", ["/tmp"], matchesPattern), false);
 });
 
 test("decides write policy from deny and allow lists", () => {
