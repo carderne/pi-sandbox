@@ -79,6 +79,7 @@ export function buildRuntimeConfig(
     ignoreViolations: config.ignoreViolations,
     enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
     allowBrowserProcess: config.allowBrowserProcess,
+    allowPty: config.allowPty,
     enableWeakerNetworkIsolation: true,
   };
 }
