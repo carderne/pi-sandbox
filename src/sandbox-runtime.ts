@@ -170,6 +170,16 @@ export function createSandboxedBashOps(shellPath?: string, sshProxy = true): Bas
           reject(error);
         });
 
+        // A daemonized grandchild (e.g. Chrome's GoogleUpdater) can inherit the
+        // piped stdio fds, which would delay the "close" event (and the exec
+        // promise) until those fds close. Tear down our pipes as soon as the
+        // direct child process exits so "close" fires promptly and the command
+        // returns even while background agents keep running.
+        child.on("exit", () => {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        });
+
         signal?.addEventListener("abort", killProcessGroup, { once: true });
         child.on("close", (code) => {
           if (timeoutHandle) clearTimeout(timeoutHandle);
