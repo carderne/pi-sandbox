@@ -56,7 +56,7 @@ export default function (pi: ExtensionAPI) {
   let sandboxInitialized = false;
   const allowances: SessionAllowances = { domains: [], readPaths: [], writePaths: [] };
 
-  const effectiveAllowances = (cwd: string) => resolveAllowances(loadConfig(cwd), allowances);
+  const effectiveAllowances = (cwd: string) => resolveAllowances(loadConfig(cwd), allowances, cwd);
   const effectiveDomains = (cwd: string) => effectiveAllowances(cwd).domains;
   const effectiveReadPaths = (cwd: string) => effectiveAllowances(cwd).readPaths;
   const effectiveWritePaths = (cwd: string) => effectiveAllowances(cwd).writePaths;
@@ -64,7 +64,7 @@ export default function (pi: ExtensionAPI) {
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     try {
-      await reinitializeSandbox(loadConfig(cwd), allowances);
+      await reinitializeSandbox(loadConfig(cwd), allowances, cwd);
     } catch (error) {
       console.error(`Warning: Failed to reinitialize sandbox: ${error}`);
     }
@@ -116,7 +116,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      await initializeSandbox(config, allowances);
+      await initializeSandbox(config, allowances, ctx.cwd);
       if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
         process.env.NODE_USE_ENV_PROXY ??= "1";
       }

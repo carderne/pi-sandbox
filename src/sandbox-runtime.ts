@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import {
   SandboxManager,
@@ -33,13 +34,47 @@ const canonicalizeFilesystemPattern = (path: string) =>
 const canonicalizeFilesystemPatterns = (paths: string[]) =>
   unique(paths.map(canonicalizeFilesystemPattern));
 
+/** Discover git metadata directories for linked worktrees and submodules (.git is a file). */
+export function discoverGitWorktreePaths(cwd: string): string[] {
+  const gitFilePath = join(cwd, ".git");
+  if (!existsSync(gitFilePath)) return [];
+
+  try {
+    const stat = statSync(gitFilePath);
+    if (!stat.isFile()) return [];
+
+    const content = readFileSync(gitFilePath, "utf-8").trim();
+    const match = content.match(/^gitdir:\s*(.+)$/m);
+    if (!match) return [];
+
+    const worktreeGitDir = resolve(cwd, match[1].trim());
+    if (!existsSync(worktreeGitDir)) return [];
+
+    const paths = [worktreeGitDir];
+    const commondirFile = join(worktreeGitDir, "commondir");
+    if (existsSync(commondirFile)) {
+      const commonGitDir = resolve(worktreeGitDir, readFileSync(commondirFile, "utf-8").trim());
+      if (existsSync(commonGitDir)) {
+        paths.push(commonGitDir);
+      }
+    }
+
+    return unique(paths);
+  } catch {
+    return [];
+  }
+}
+
 export function resolveAllowances(
   config: SandboxConfig,
   allowances?: SessionAllowances,
+  cwd: string = process.cwd(),
 ): EffectiveAllowances {
+  const gitPaths = discoverGitWorktreePaths(cwd);
   const writePaths = unique([
     ...(config.filesystem?.allowWrite ?? []),
     ...(allowances?.writePaths ?? []),
+    ...gitPaths,
   ]);
 
   return {
@@ -60,8 +95,9 @@ export function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCa
 export function buildRuntimeConfig(
   config: SandboxConfig,
   allowances?: SessionAllowances,
+  cwd: string = process.cwd(),
 ): SandboxRuntimeConfig {
-  const effective = resolveAllowances(config, allowances);
+  const effective = resolveAllowances(config, allowances, cwd);
 
   return {
     network: {
@@ -87,8 +123,9 @@ export function buildRuntimeConfig(
 export async function initializeSandbox(
   config: SandboxConfig,
   allowances?: SessionAllowances,
+  cwd: string = process.cwd(),
 ): Promise<void> {
-  const runtimeConfig = buildRuntimeConfig(config, allowances);
+  const runtimeConfig = buildRuntimeConfig(config, allowances, cwd);
   await SandboxManager.initialize(
     runtimeConfig,
     createNetworkAskCallback(runtimeConfig.network?.allowedDomains ?? []),
@@ -98,9 +135,10 @@ export async function initializeSandbox(
 export async function reinitializeSandbox(
   config: SandboxConfig,
   allowances: SessionAllowances,
+  cwd: string = process.cwd(),
 ): Promise<void> {
   await SandboxManager.reset();
-  await initializeSandbox(config, allowances);
+  await initializeSandbox(config, allowances, cwd);
 }
 
 export function supportsNodeEnvProxy(version: string): boolean {

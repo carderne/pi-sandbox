@@ -18,6 +18,12 @@ These open significant security loopholes, so shouldn't be used in a sensitive c
 
 You may need to trial and error to find additional things you need to allow.
 
+When the session working directory is a linked git worktree or submodule checkout,
+the extension automatically allows the git metadata directories referenced by the
+`.git` file (including the shared `.git` directory for worktrees). This lets
+`git` commands work without manual config, but it is a deliberate sandbox
+relaxation scoped to paths git itself references.
+
 ## Quickstart
 
 #### Prerequisites
