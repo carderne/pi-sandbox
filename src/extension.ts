@@ -22,7 +22,9 @@ import {
   resolveWritePermission,
 } from "./policy.ts";
 import {
+  clearGitWorktreePathCache,
   createSandboxedBashOps,
+  discoverSeparateGitDirPath,
   extractBlockedWritePath,
   initializeSandbox,
   reinitializeSandbox,
@@ -36,6 +38,7 @@ import {
   type PermissionPromptResult,
   promptDomainBlock,
   promptReadBlock,
+  promptSeparateGitDirBlock,
   showPermissionPrompt,
   promptWriteBlock,
   warnIfAllDomainsAllowed,
@@ -99,6 +102,42 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", formatSandboxStatus(config)));
   }
 
+  async function allowSeparateGitDir(
+    ctx: Parameters<typeof warnIfAllDomainsAllowed>[0],
+    config: ReturnType<typeof loadConfig>,
+  ): Promise<ReturnType<typeof loadConfig>> {
+    if (config.autoAllowGitMetadata === false || config.filesystem?.disabled) return config;
+
+    const separateGitDirPath = discoverSeparateGitDirPath(ctx.cwd);
+    if (!separateGitDirPath) return config;
+
+    // Explicit filesystem permissions take precedence over the confirmation prompt.
+    if (matchesPattern(separateGitDirPath, effectiveWritePaths(ctx.cwd))) return config;
+
+    if (!ctx.hasUI) {
+      ctx.ui.notify(
+        `Git metadata access is blocked for this separate-git-dir checkout: ${separateGitDirPath}. ` +
+          "Add it to filesystem.allowWrite or enable the sandbox with an interactive session.",
+        "warning",
+      );
+      return config;
+    }
+
+    const choice = await promptSeparateGitDirBlock(
+      pi,
+      ctx,
+      separateGitDirPath,
+      config.permissionPromptTimeoutSeconds,
+    );
+    if (choice.action === "abort") {
+      ctx.ui.notify(`Git metadata remains blocked: ${separateGitDirPath}`, "warning");
+      return config;
+    }
+
+    await applyChoice(choice.action, "write", choice.value, ctx.cwd);
+    return loadConfig(ctx.cwd);
+  }
+
   async function enableSandbox(
     ctx: Parameters<typeof warnIfAllDomainsAllowed>[0],
     setProxyEnvironment: boolean,
@@ -108,7 +147,7 @@ export default function (pi: ExtensionAPI) {
       return false;
     }
 
-    const config = loadConfig(ctx.cwd);
+    let config = loadConfig(ctx.cwd);
     const platform = process.platform;
     if (platform !== "darwin" && platform !== "linux") {
       ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
@@ -116,6 +155,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
+      config = await allowSeparateGitDir(ctx, config);
       await initializeSandbox(config, allowances, ctx.cwd);
       if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
         process.env.NODE_USE_ENV_PROXY ??= "1";
@@ -150,6 +190,7 @@ export default function (pi: ExtensionAPI) {
         // Ignore cleanup errors.
       }
     }
+    clearGitWorktreePathCache();
     sandboxEnabled = false;
     sandboxInitialized = false;
     ctx.ui.setStatus("sandbox", "");
@@ -357,6 +398,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    clearGitWorktreePathCache();
     if (!sandboxInitialized) return;
     try {
       await SandboxManager.reset();

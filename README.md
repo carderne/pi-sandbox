@@ -18,11 +18,19 @@ These open significant security loopholes, so shouldn't be used in a sensitive c
 
 You may need to trial and error to find additional things you need to allow.
 
-When the session working directory is a linked git worktree or submodule checkout,
-the extension automatically allows the git metadata directories referenced by the
-`.git` file (including the shared `.git` directory for worktrees). This lets
-`git` commands work without manual config, but it is a deliberate sandbox
-relaxation scoped to paths git itself references.
+When the session working directory is anywhere inside a linked git worktree or
+submodule checkout, the extension asks git to validate the checkout and
+automatically allows the metadata directories it reports (including the shared
+`.git` directory for worktrees). This lets `git` commands work without manual
+config, but it is a deliberate sandbox relaxation scoped to paths git itself
+recognizes as repository metadata. Checkouts created with
+`git --separate-git-dir` do not have Git's reciprocal metadata pointer, so the
+extension asks for explicit approval before allowing their separate metadata
+directory. In a headless session, separate metadata remains blocked unless it
+is already covered by `filesystem.allowWrite`. Set `autoAllowGitMetadata` to
+`false` to disable all automatic Git metadata handling and rely only on explicit
+filesystem allowances. This feature requires `git` on the `PATH` that pi was
+launched with.
 
 ## Quickstart
 
@@ -77,6 +85,7 @@ Note below that the order of precedence for filesystem read and write are opposi
 ```json
 {
   "enabled": true,
+  "autoAllowGitMetadata": true, // Set false to disable automatic Git metadata access
   "permissionPromptTimeoutSeconds": 600, // Defaults to 10 minutes; 0 waits indefinitely
   "allowBrowserProcess": true,     // If you want to use agent-browser or similar Chrome setup
   "network": {

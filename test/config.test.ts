@@ -20,6 +20,19 @@ test("omitted permission prompt timeout defaults to ten minutes", () => {
 
   assert.equal(DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS, 600);
   assert.equal(merged.permissionPromptTimeoutSeconds, DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS);
+  assert.equal(merged.autoAllowGitMetadata, true);
+});
+
+test("project config overrides the global Git metadata setting", () => {
+  const globalDisabled = mergeConfigLayers(DEFAULT_CONFIG, { autoAllowGitMetadata: false }, {});
+  const projectEnabled = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    { autoAllowGitMetadata: false },
+    { autoAllowGitMetadata: true },
+  );
+
+  assert.equal(globalDisabled.autoAllowGitMetadata, false);
+  assert.equal(projectEnabled.autoAllowGitMetadata, true);
 });
 
 test("mergeConfigLayers combines configured arrays and deduplicates entries", () => {

@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
   SandboxManager,
@@ -34,35 +34,199 @@ const canonicalizeFilesystemPattern = (path: string) =>
 const canonicalizeFilesystemPatterns = (paths: string[]) =>
   unique(paths.map(canonicalizeFilesystemPattern));
 
-/** Discover git metadata directories for linked worktrees and submodules (.git is a file). */
-export function discoverGitWorktreePaths(cwd: string): string[] {
-  const gitFilePath = join(cwd, ".git");
-  if (!existsSync(gitFilePath)) return [];
+function pathsReferToSameLocation(first: string, second: string): boolean {
+  return canonicalizePath(first) === canonicalizePath(second);
+}
 
+function pathIsWithin(path: string, parent: string): boolean {
+  const relativePath = relative(canonicalizePath(parent), canonicalizePath(path));
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
+  );
+}
+
+/** Walk ancestors to see if cwd is under a worktree/submodule (.git file) vs a regular clone. */
+export function ancestorHasGitMetadataFile(cwd: string): boolean {
   try {
-    const stat = statSync(gitFilePath);
-    if (!stat.isFile()) return [];
-
-    const content = readFileSync(gitFilePath, "utf-8").trim();
-    const match = content.match(/^gitdir:\s*(.+)$/m);
-    if (!match) return [];
-
-    const worktreeGitDir = resolve(cwd, match[1].trim());
-    if (!existsSync(worktreeGitDir)) return [];
-
-    const paths = [worktreeGitDir];
-    const commondirFile = join(worktreeGitDir, "commondir");
-    if (existsSync(commondirFile)) {
-      const commonGitDir = resolve(worktreeGitDir, readFileSync(commondirFile, "utf-8").trim());
-      if (existsSync(commonGitDir)) {
-        paths.push(commonGitDir);
+    let current = canonicalizePath(cwd);
+    while (true) {
+      const gitPath = join(current, ".git");
+      if (existsSync(gitPath)) {
+        const stat = lstatSync(gitPath);
+        if (stat.isFile()) return true;
+        return false;
       }
+      const parent = dirname(current);
+      if (parent === current) return false;
+      current = parent;
+    }
+  } catch {
+    return false;
+  }
+}
+
+export interface GitMetadataDiscovery {
+  /** Metadata paths that have been verified as belonging to this checkout. */
+  verifiedPaths: string[];
+  /** A separate-git-dir candidate that requires explicit user approval. */
+  separateGitDirPath: string | null;
+}
+
+const gitWorktreePathCache = new Map<string, GitMetadataDiscovery>();
+
+function readGitDirPointer(worktreeRoot: string): string | null {
+  try {
+    const gitFilePath = join(worktreeRoot, ".git");
+    if (!lstatSync(gitFilePath).isFile()) return null;
+    const content = readFileSync(gitFilePath, "utf-8");
+    const match = content.match(/^gitdir:\s*(.+)$/m);
+    return match ? resolve(worktreeRoot, match[1]!.trim()) : null;
+  } catch {
+    return null;
+  }
+}
+
+type GitMetadataValidation = "verified" | "separate-git-dir" | "invalid";
+
+function gitMetadataBelongsToWorktree(
+  worktreeRoot: string,
+  worktreeGitDir: string,
+  commonGitDir: string,
+): GitMetadataValidation {
+  try {
+    const gitFilePath = join(worktreeRoot, ".git");
+    const pointedGitDir = readGitDirPointer(worktreeRoot);
+    if (pointedGitDir === null || !pathsReferToSameLocation(pointedGitDir, worktreeGitDir)) {
+      return "invalid";
     }
 
-    return unique(paths);
+    // Linked worktree: git-dir differs from common-git-dir; validate gitdir back-pointer.
+    if (!pathsReferToSameLocation(worktreeGitDir, commonGitDir)) {
+      if (!pathsReferToSameLocation(dirname(worktreeGitDir), join(commonGitDir, "worktrees"))) {
+        return "invalid";
+      }
+      const backPointerPath = join(worktreeGitDir, "gitdir");
+      if (!lstatSync(backPointerPath).isFile()) return "invalid";
+      const backPointer = readFileSync(backPointerPath, "utf-8").replace(/\r?\n$/, "");
+      return backPointer.length > 0 &&
+        pathsReferToSameLocation(resolve(worktreeGitDir, backPointer), gitFilePath)
+        ? "verified"
+        : "invalid";
+    }
+
+    const configPath = join(worktreeGitDir, "config");
+    if (!lstatSync(configPath).isFile()) return "invalid";
+
+    let worktreeOutput: string;
+    try {
+      worktreeOutput = execFileSync(
+        "git",
+        ["config", "--file", configPath, "--path", "--null", "--get", "core.worktree"],
+        { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
+      );
+    } catch (error) {
+      // A valid `git init --separate-git-dir` checkout has no core.worktree entry.
+      // It is not reciprocally authenticated, so return it as a candidate for prompting.
+      return (error as { status?: number }).status === 1 ? "separate-git-dir" : "invalid";
+    }
+
+    if (
+      !worktreeOutput.endsWith("\0") ||
+      worktreeOutput.indexOf("\0") !== worktreeOutput.length - 1
+    ) {
+      return "invalid";
+    }
+    const configuredWorktree = worktreeOutput.slice(0, -1);
+    return configuredWorktree.length > 0 &&
+      pathsReferToSameLocation(resolve(worktreeGitDir, configuredWorktree), worktreeRoot)
+      ? "verified"
+      : "invalid";
   } catch {
-    return [];
+    return "invalid";
   }
+}
+
+function discoverGitMetadataViaGit(cwd: string): GitMetadataDiscovery {
+  try {
+    const gitEnvironment = { ...process.env };
+    delete gitEnvironment.GIT_DIR;
+    delete gitEnvironment.GIT_WORK_TREE;
+    delete gitEnvironment.GIT_COMMON_DIR;
+
+    const output = execFileSync(
+      "git",
+      ["-C", cwd, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"],
+      {
+        encoding: "utf-8",
+        env: gitEnvironment,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    const lines = output.replace(/\r?\n$/, "").split(/\r?\n/);
+    if (lines.length !== 3 || lines.some((line) => line.length === 0)) {
+      return { verifiedPaths: [], separateGitDirPath: null };
+    }
+
+    const [worktreeRoot, worktreeGitDir, commonGitDirOutput] = lines;
+    if (!isAbsolute(worktreeRoot) || !isAbsolute(worktreeGitDir)) {
+      return { verifiedPaths: [], separateGitDirPath: null };
+    }
+    if (!pathIsWithin(cwd, worktreeRoot)) {
+      return { verifiedPaths: [], separateGitDirPath: null };
+    }
+
+    const commonGitDir = resolve(cwd, commonGitDirOutput);
+    if (!statSync(worktreeGitDir).isDirectory() || !statSync(commonGitDir).isDirectory()) {
+      return { verifiedPaths: [], separateGitDirPath: null };
+    }
+
+    const validation = gitMetadataBelongsToWorktree(worktreeRoot, worktreeGitDir, commonGitDir);
+    if (validation === "verified") {
+      return {
+        verifiedPaths: unique([worktreeGitDir, commonGitDir]),
+        separateGitDirPath: null,
+      };
+    }
+    if (validation === "separate-git-dir") {
+      return { verifiedPaths: [], separateGitDirPath: worktreeGitDir };
+    }
+  } catch {
+    // Fall through to an empty result when git is unavailable or rejects the checkout.
+  }
+  return { verifiedPaths: [], separateGitDirPath: null };
+}
+
+function cloneGitMetadataDiscovery(discovery: GitMetadataDiscovery): GitMetadataDiscovery {
+  return {
+    verifiedPaths: [...discovery.verifiedPaths],
+    separateGitDirPath: discovery.separateGitDirPath,
+  };
+}
+
+export function clearGitWorktreePathCache(): void {
+  gitWorktreePathCache.clear();
+}
+
+export function discoverGitMetadata(cwd: string): GitMetadataDiscovery {
+  const cacheKey = canonicalizePath(cwd);
+  const cached = gitWorktreePathCache.get(cacheKey);
+  if (cached !== undefined) return cloneGitMetadataDiscovery(cached);
+
+  const result = ancestorHasGitMetadataFile(cwd)
+    ? discoverGitMetadataViaGit(cwd)
+    : { verifiedPaths: [], separateGitDirPath: null };
+  gitWorktreePathCache.set(cacheKey, result);
+  return cloneGitMetadataDiscovery(result);
+}
+
+/** Discover verified metadata directories for linked worktrees and submodules (.git is a file). */
+export function discoverGitWorktreePaths(cwd: string): string[] {
+  return discoverGitMetadata(cwd).verifiedPaths;
+}
+
+export function discoverSeparateGitDirPath(cwd: string): string | null {
+  return discoverGitMetadata(cwd).separateGitDirPath;
 }
 
 export function resolveAllowances(
@@ -70,7 +234,7 @@ export function resolveAllowances(
   allowances?: SessionAllowances,
   cwd: string = process.cwd(),
 ): EffectiveAllowances {
-  const gitPaths = discoverGitWorktreePaths(cwd);
+  const gitPaths = config.autoAllowGitMetadata === false ? [] : discoverGitWorktreePaths(cwd);
   const writePaths = unique([
     ...(config.filesystem?.allowWrite ?? []),
     ...(allowances?.writePaths ?? []),
@@ -125,6 +289,7 @@ export async function initializeSandbox(
   allowances?: SessionAllowances,
   cwd: string = process.cwd(),
 ): Promise<void> {
+  clearGitWorktreePathCache();
   const runtimeConfig = buildRuntimeConfig(config, allowances, cwd);
   await SandboxManager.initialize(
     runtimeConfig,

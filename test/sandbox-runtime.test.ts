@@ -1,21 +1,85 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import test from "node:test";
 
+import { SandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
+  ancestorHasGitMetadataFile,
   buildRuntimeConfig,
+  clearGitWorktreePathCache,
   discoverGitWorktreePaths,
+  discoverSeparateGitDirPath,
   extractBlockedWritePath,
+  initializeSandbox,
   resolveAllowances,
   supportsNodeEnvProxy,
 } from "../src/sandbox-runtime.ts";
 
 const NON_GIT_CWD = "/non-git-dir";
+
+function runGit(cwd: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).replace(/\r?\n$/, "");
+}
+
+function initializeRepository(repoDir: string): void {
+  mkdirSync(repoDir, { recursive: true });
+  runGit(repoDir, ["init", "--quiet"]);
+  runGit(repoDir, [
+    "-c",
+    "user.name=Pi Sandbox Tests",
+    "-c",
+    "user.email=pi-sandbox@example.invalid",
+    "commit",
+    "--quiet",
+    "--allow-empty",
+    "-m",
+    "Initial commit",
+  ]);
+}
+
+function createLinkedWorktree(tempDir: string): { mainRepo: string; worktreeDir: string } {
+  const mainRepo = join(tempDir, "main-repo");
+  const worktreeDir = join(tempDir, "linked-worktree");
+  initializeRepository(mainRepo);
+  runGit(mainRepo, ["worktree", "add", "--quiet", "-b", "test-worktree", worktreeDir]);
+  return { mainRepo, worktreeDir };
+}
+
+function createSeparateGitDirCheckout(tempDir: string): {
+  gitDir: string;
+  worktreeDir: string;
+} {
+  const gitDir = join(tempDir, "separate-git-dir");
+  const worktreeDir = join(tempDir, "separate-worktree");
+  runGit(tempDir, ["init", "--quiet", `--separate-git-dir=${gitDir}`, worktreeDir]);
+  return { gitDir, worktreeDir };
+}
+
+function withEnvironment(overrides: Record<string, string>, callback: () => void): void {
+  const previous = new Map<string, string | undefined>();
+  for (const [name, value] of Object.entries(overrides)) {
+    previous.set(name, process.env[name]);
+    process.env[name] = value;
+  }
+  try {
+    callback();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
 
 test("buildRuntimeConfig adds session allowances without mutating config", () => {
   const runtime = buildRuntimeConfig(
@@ -94,95 +158,333 @@ test("supportsNodeEnvProxy observes Node release boundaries", () => {
   assert.equal(supportsNodeEnvProxy("24.0.0"), true);
 });
 
-test("discoverGitWorktreePaths discovers external worktree and common git directories", () => {
-  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-worktree-test-"));
+test("ancestorHasGitMetadataFile distinguishes worktrees from regular clones", () => {
+  clearGitWorktreePathCache();
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-ancestor-test-"));
   try {
     const mainRepo = join(tempDir, "main-repo");
-    const mainGit = join(mainRepo, ".git");
-    const worktreeGitDir = join(mainGit, "worktrees", "feature-branch");
-    const worktreeDir = join(tempDir, "worktrees", "feature-branch");
+    initializeRepository(mainRepo);
+    const nestedMainRepoDir = join(mainRepo, "src", "nested");
+    mkdirSync(nestedMainRepoDir, { recursive: true });
 
-    mkdirSync(worktreeGitDir, { recursive: true });
-    mkdirSync(worktreeDir, { recursive: true });
+    assert.equal(ancestorHasGitMetadataFile(mainRepo), false);
+    assert.equal(ancestorHasGitMetadataFile(nestedMainRepoDir), false);
 
-    writeFileSync(join(worktreeGitDir, "commondir"), "../..\n");
-    writeFileSync(join(worktreeDir, ".git"), `gitdir: ${worktreeGitDir}\n`);
+    const { worktreeDir } = createLinkedWorktree(tempDir);
+    const nestedWorktreeDir = join(worktreeDir, "src", "nested");
+    mkdirSync(nestedWorktreeDir, { recursive: true });
+    assert.equal(ancestorHasGitMetadataFile(worktreeDir), true);
+    assert.equal(ancestorHasGitMetadataFile(nestedWorktreeDir), true);
 
-    const discovered = discoverGitWorktreePaths(worktreeDir);
-    assert.deepEqual(discovered, [worktreeGitDir, mainGit]);
+    const forgedWorktree = join(tempDir, "forged-worktree");
+    mkdirSync(forgedWorktree, { recursive: true });
+    writeFileSync(join(forgedWorktree, ".git"), "gitdir: /tmp/does-not-matter\n");
+    assert.equal(ancestorHasGitMetadataFile(forgedWorktree), true);
 
-    // Relative gitdir path (common in real worktrees)
-    const relWorktreeGitDir = join(mainGit, "worktrees", "rel-branch");
-    const relWorktreeDir = join(tempDir, "worktrees", "rel-branch");
-    mkdirSync(relWorktreeGitDir, { recursive: true });
-    mkdirSync(relWorktreeDir, { recursive: true });
-    writeFileSync(join(relWorktreeGitDir, "commondir"), "../..\n");
-    writeFileSync(
-      join(relWorktreeDir, ".git"),
-      `gitdir: ../../main-repo/.git/worktrees/rel-branch\n`,
-    );
-    assert.deepEqual(discoverGitWorktreePaths(relWorktreeDir), [relWorktreeGitDir, mainGit]);
+    const symlinkForgedWorktree = join(tempDir, "symlink-forged-worktree");
+    mkdirSync(symlinkForgedWorktree, { recursive: true });
+    symlinkSync(join(worktreeDir, ".git"), join(symlinkForgedWorktree, ".git"));
+    assert.equal(ancestorHasGitMetadataFile(symlinkForgedWorktree), false);
 
-    // Worktree with absolute commondir and trailing whitespace / CRLF in .git
-    const absWorktreeGitDir = join(mainGit, "worktrees", "abs-branch");
-    const absWorktreeDir = join(tempDir, "worktrees", "abs-branch");
-    mkdirSync(absWorktreeGitDir, { recursive: true });
-    mkdirSync(absWorktreeDir, { recursive: true });
-    writeFileSync(join(absWorktreeGitDir, "commondir"), `${mainGit}\n`);
-    writeFileSync(join(absWorktreeDir, ".git"), `gitdir: ${absWorktreeGitDir}  \r\n`);
-    assert.deepEqual(discoverGitWorktreePaths(absWorktreeDir), [absWorktreeGitDir, mainGit]);
-
-    // Worktree without commondir returns only worktreeGitDir without escalating to parents
-    const noCommondirGitDir = join(tempDir, "isolated-gitdir");
-    const noCommondirWorktreeDir = join(tempDir, "isolated-worktree");
-    mkdirSync(noCommondirGitDir, { recursive: true });
-    mkdirSync(noCommondirWorktreeDir, { recursive: true });
-    writeFileSync(join(noCommondirWorktreeDir, ".git"), `gitdir: ${noCommondirGitDir}\n`);
-    assert.deepEqual(discoverGitWorktreePaths(noCommondirWorktreeDir), [noCommondirGitDir]);
-
-    // Non-existent gitdir pointer returns empty
-    const staleWorktreeDir = join(tempDir, "stale-worktree");
-    mkdirSync(staleWorktreeDir, { recursive: true });
-    writeFileSync(join(staleWorktreeDir, ".git"), `gitdir: ${join(tempDir, "does-not-exist")}\n`);
-    assert.deepEqual(discoverGitWorktreePaths(staleWorktreeDir), []);
-
-    // Malformed .git file returns empty
-    const malformedDir = join(tempDir, "malformed-worktree");
-    mkdirSync(malformedDir, { recursive: true });
-    writeFileSync(join(malformedDir, ".git"), "not a gitdir line\n");
-    assert.deepEqual(discoverGitWorktreePaths(malformedDir), []);
-
-    // Regular clone with .git directory returns empty
-    assert.deepEqual(discoverGitWorktreePaths(mainRepo), []);
-
-    // Non-git directory returns empty
-    const nonGitDir = join(tempDir, "plain-dir");
-    mkdirSync(nonGitDir, { recursive: true });
-    assert.deepEqual(discoverGitWorktreePaths(nonGitDir), []);
+    const plainDir = join(tempDir, "plain-dir");
+    mkdirSync(plainDir, { recursive: true });
+    assert.equal(ancestorHasGitMetadataFile(plainDir), false);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+    clearGitWorktreePathCache();
   }
 });
 
-test("resolveAllowances includes discovered git worktree paths", () => {
-  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-allowance-test-"));
+test("discoverGitWorktreePaths caches git discovery per cwd and returns independent array copies", () => {
+  clearGitWorktreePathCache();
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-git-cache-test-"));
   try {
-    const mainGit = join(tempDir, "main-repo", ".git");
-    const worktreeGitDir = join(mainGit, "worktrees", "task");
-    const worktreeDir = join(tempDir, "task-worktree");
+    const { worktreeDir } = createLinkedWorktree(tempDir);
+    const first = discoverGitWorktreePaths(worktreeDir);
+    assert.ok(first.length > 0);
 
-    mkdirSync(worktreeGitDir, { recursive: true });
-    mkdirSync(worktreeDir, { recursive: true });
+    const second = discoverGitWorktreePaths(worktreeDir);
+    assert.deepEqual(second, first);
+    assert.notEqual(second, first);
 
-    writeFileSync(join(worktreeGitDir, "commondir"), "../..\n");
-    writeFileSync(join(worktreeDir, ".git"), `gitdir: ${worktreeGitDir}\n`);
+    first.push("/corrupted-entry");
+    const third = discoverGitWorktreePaths(worktreeDir);
+    assert.deepEqual(third, second);
+    assert.equal(third.includes("/corrupted-entry"), false);
 
-    const effective = resolveAllowances(DEFAULT_CONFIG, undefined, worktreeDir);
-    assert.equal(effective.writePaths.includes(worktreeGitDir), true);
-    assert.equal(effective.writePaths.includes(mainGit), true);
-    assert.equal(effective.readPaths.includes(worktreeGitDir), true);
-    assert.equal(effective.readPaths.includes(mainGit), true);
+    clearGitWorktreePathCache();
+    const fourth = discoverGitWorktreePaths(worktreeDir);
+    assert.deepEqual(fourth, second);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+    clearGitWorktreePathCache();
+  }
+});
+
+test("initializeSandbox discards cached git discovery before building config", async () => {
+  clearGitWorktreePathCache();
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-git-init-cache-test-"));
+  try {
+    const { worktreeDir } = createLinkedWorktree(tempDir);
+    const first = discoverGitWorktreePaths(worktreeDir);
+    assert.ok(first.length > 0);
+
+    writeFileSync(join(worktreeDir, ".git"), "not a gitdir line\n");
+    assert.deepEqual(discoverGitWorktreePaths(worktreeDir), first);
+
+    try {
+      await initializeSandbox(
+        { ...DEFAULT_CONFIG, autoAllowGitMetadata: false },
+        undefined,
+        worktreeDir,
+      );
+    } catch {
+      // SandboxManager.initialize may fail without OS sandbox deps; cache must still be cleared first.
+    }
+
+    assert.deepEqual(discoverGitWorktreePaths(worktreeDir), []);
+  } finally {
+    try {
+      await SandboxManager.reset();
+    } catch {
+      // Ignore cleanup errors when initialize never succeeded.
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+    clearGitWorktreePathCache();
+  }
+});
+
+test("discoverGitWorktreePaths discovers linked worktree metadata from nested directories", () => {
+  clearGitWorktreePathCache();
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-worktree-test-"));
+  try {
+    const { mainRepo, worktreeDir } = createLinkedWorktree(tempDir);
+    const nestedWorktreeDir = join(worktreeDir, "src", "nested");
+    mkdirSync(nestedWorktreeDir, { recursive: true });
+
+    const worktreeGitDir = runGit(worktreeDir, ["rev-parse", "--absolute-git-dir"]);
+    const commonGitDir = resolve(
+      worktreeDir,
+      runGit(worktreeDir, ["rev-parse", "--git-common-dir"]),
+    );
+    const expected = [worktreeGitDir, commonGitDir];
+
+    assert.deepEqual(discoverGitWorktreePaths(worktreeDir), expected);
+    assert.deepEqual(discoverGitWorktreePaths(nestedWorktreeDir), expected);
+
+    const unrelatedRepo = join(tempDir, "unrelated-repo");
+    initializeRepository(unrelatedRepo);
+    withEnvironment({ GIT_COMMON_DIR: join(unrelatedRepo, ".git") }, () => {
+      assert.deepEqual(discoverGitWorktreePaths(nestedWorktreeDir), expected);
+    });
+    const unrelatedWorktree = join(tempDir, "unrelated-worktree");
+    runGit(unrelatedRepo, [
+      "worktree",
+      "add",
+      "--quiet",
+      "-b",
+      "unrelated-worktree",
+      unrelatedWorktree,
+    ]);
+    const unrelatedGitDir = runGit(unrelatedWorktree, ["rev-parse", "--absolute-git-dir"]);
+    withEnvironment({ GIT_DIR: unrelatedGitDir }, () => {
+      assert.deepEqual(discoverGitWorktreePaths(worktreeDir), expected);
+    });
+
+    const forgedWorktree = join(tempDir, "forged-worktree");
+    mkdirSync(forgedWorktree, { recursive: true });
+    writeFileSync(join(forgedWorktree, ".git"), `gitdir: ${worktreeGitDir}\n`);
+    assert.deepEqual(discoverGitWorktreePaths(forgedWorktree), []);
+
+    const symlinkForgedWorktree = join(tempDir, "symlink-forged-worktree");
+    mkdirSync(symlinkForgedWorktree, { recursive: true });
+    symlinkSync(join(worktreeDir, ".git"), join(symlinkForgedWorktree, ".git"));
+    assert.deepEqual(discoverGitWorktreePaths(symlinkForgedWorktree), []);
+
+    writeFileSync(
+      join(worktreeDir, ".git"),
+      `gitdir: ${relative(worktreeDir, worktreeGitDir)}\r\n`,
+    );
+    clearGitWorktreePathCache();
+    assert.deepEqual(discoverGitWorktreePaths(nestedWorktreeDir), expected);
+
+    const nestedMainRepoDir = join(mainRepo, "src", "nested");
+    mkdirSync(nestedMainRepoDir, { recursive: true });
+    assert.deepEqual(discoverGitWorktreePaths(nestedMainRepoDir), []);
+
+    const innerRepo = join(worktreeDir, "vendor", "inner-repo");
+    initializeRepository(innerRepo);
+    const nestedInnerRepoDir = join(innerRepo, "src", "nested");
+    mkdirSync(nestedInnerRepoDir, { recursive: true });
+    assert.deepEqual(discoverGitWorktreePaths(nestedInnerRepoDir), []);
+    withEnvironment({ GIT_WORK_TREE: worktreeDir }, () => {
+      assert.deepEqual(discoverGitWorktreePaths(nestedInnerRepoDir), []);
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    clearGitWorktreePathCache();
+  }
+});
+
+test("discoverGitWorktreePaths identifies separate git dirs without auto-allowing them", () => {
+  clearGitWorktreePathCache();
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-separate-git-dir-test-"));
+  try {
+    const { gitDir, worktreeDir } = createSeparateGitDirCheckout(tempDir);
+    const nestedWorktreeDir = join(worktreeDir, "src", "nested");
+    mkdirSync(nestedWorktreeDir, { recursive: true });
+
+    const restrictiveConfig = {
+      ...DEFAULT_CONFIG,
+      filesystem: {
+        ...DEFAULT_CONFIG.filesystem!,
+        allowRead: [],
+        allowWrite: [],
+      },
+    };
+    const discoveredGitDir = discoverSeparateGitDirPath(nestedWorktreeDir);
+    assert.equal(discoveredGitDir, canonicalizePath(gitDir));
+    assert.deepEqual(discoverGitWorktreePaths(nestedWorktreeDir), []);
+
+    const automatic = resolveAllowances(restrictiveConfig, undefined, nestedWorktreeDir);
+    assert.equal(automatic.writePaths.includes(gitDir), false);
+    assert.equal(automatic.readPaths.includes(gitDir), false);
+
+    const explicitlyAllowed = resolveAllowances(
+      {
+        ...restrictiveConfig,
+        filesystem: { ...restrictiveConfig.filesystem, allowWrite: [gitDir] },
+      },
+      undefined,
+      nestedWorktreeDir,
+    );
+    assert.equal(explicitlyAllowed.writePaths.includes(gitDir), true);
+    assert.equal(explicitlyAllowed.readPaths.includes(gitDir), true);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    clearGitWorktreePathCache();
+  }
+});
+
+test("discoverGitWorktreePaths discovers submodule metadata from nested directories", () => {
+  clearGitWorktreePathCache();
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-submodule-test-"));
+  try {
+    const submoduleSource = join(tempDir, "submodule-source");
+    const mainRepo = join(tempDir, "main-repo");
+    initializeRepository(submoduleSource);
+    initializeRepository(mainRepo);
+    runGit(mainRepo, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "--quiet",
+      submoduleSource,
+      "modules/child",
+    ]);
+
+    const submoduleDir = join(mainRepo, "modules", "child");
+    const nestedSubmoduleDir = join(submoduleDir, "src", "nested");
+    mkdirSync(nestedSubmoduleDir, { recursive: true });
+    const gitDir = runGit(submoduleDir, ["rev-parse", "--absolute-git-dir"]);
+    const commonGitDir = resolve(
+      submoduleDir,
+      runGit(submoduleDir, ["rev-parse", "--git-common-dir"]),
+    );
+
+    assert.deepEqual(discoverGitWorktreePaths(nestedSubmoduleDir), [
+      ...new Set([gitDir, commonGitDir]),
+    ]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    clearGitWorktreePathCache();
+  }
+});
+
+test("discoverGitWorktreePaths rejects metadata paths that git does not validate", () => {
+  clearGitWorktreePathCache();
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-invalid-git-test-"));
+  try {
+    const arbitraryTarget = join(tempDir, "arbitrary-target");
+    const invalidCheckout = join(tempDir, "invalid-checkout");
+    mkdirSync(arbitraryTarget, { recursive: true });
+    mkdirSync(invalidCheckout, { recursive: true });
+    writeFileSync(join(invalidCheckout, ".git"), `gitdir: ${arbitraryTarget}\n`);
+    assert.deepEqual(discoverGitWorktreePaths(invalidCheckout), []);
+
+    const validTarget = join(tempDir, "valid-target");
+    const forgedCheckout = join(tempDir, "forged-checkout");
+    initializeRepository(validTarget);
+    mkdirSync(forgedCheckout, { recursive: true });
+    writeFileSync(join(forgedCheckout, ".git"), `gitdir: ${join(validTarget, ".git")}\n`);
+    assert.deepEqual(discoverGitWorktreePaths(forgedCheckout), []);
+    withEnvironment(
+      {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "core.worktree",
+        GIT_CONFIG_VALUE_0: forgedCheckout,
+      },
+      () => {
+        assert.deepEqual(discoverGitWorktreePaths(forgedCheckout), []);
+      },
+    );
+
+    const staleCheckout = join(tempDir, "stale-checkout");
+    mkdirSync(staleCheckout, { recursive: true });
+    writeFileSync(join(staleCheckout, ".git"), `gitdir: ${join(tempDir, "missing")}\n`);
+    assert.deepEqual(discoverGitWorktreePaths(staleCheckout), []);
+
+    const malformedCheckout = join(tempDir, "malformed-checkout");
+    mkdirSync(malformedCheckout, { recursive: true });
+    writeFileSync(join(malformedCheckout, ".git"), "not a gitdir line\n");
+    assert.deepEqual(discoverGitWorktreePaths(malformedCheckout), []);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    clearGitWorktreePathCache();
+  }
+});
+
+test("resolveAllowances includes worktree metadata discovered from a nested directory", () => {
+  clearGitWorktreePathCache();
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-sandbox-allowance-test-"));
+  try {
+    const { worktreeDir } = createLinkedWorktree(tempDir);
+    const nestedWorktreeDir = join(worktreeDir, "src", "nested");
+    mkdirSync(nestedWorktreeDir, { recursive: true });
+    const gitPaths = discoverGitWorktreePaths(nestedWorktreeDir);
+    assert.equal(gitPaths.length, 2);
+
+    const effective = resolveAllowances(DEFAULT_CONFIG, undefined, nestedWorktreeDir);
+    for (const gitPath of gitPaths) {
+      assert.equal(effective.writePaths.includes(gitPath), true);
+      assert.equal(effective.readPaths.includes(gitPath), true);
+    }
+
+    const disabled = resolveAllowances(
+      {
+        ...DEFAULT_CONFIG,
+        autoAllowGitMetadata: false,
+        filesystem: {
+          ...DEFAULT_CONFIG.filesystem!,
+          allowWrite: ["/explicit-write"],
+        },
+      },
+      {
+        domains: [],
+        readPaths: [],
+        writePaths: ["/session-write"],
+      },
+      nestedWorktreeDir,
+    );
+    for (const gitPath of gitPaths) {
+      assert.equal(disabled.writePaths.includes(gitPath), false);
+      assert.equal(disabled.readPaths.includes(gitPath), false);
+    }
+    assert.equal(disabled.writePaths.includes("/explicit-write"), true);
+    assert.equal(disabled.writePaths.includes("/session-write"), true);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    clearGitWorktreePathCache();
   }
 });
