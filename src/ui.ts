@@ -346,6 +346,22 @@ export function promptWriteBlock(
   );
 }
 
+export function promptSeparateGitDirBlock(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  path: string,
+  timeoutSeconds?: number,
+): Promise<PermissionPromptResult> {
+  return showPermissionPrompt(
+    pi,
+    ctx,
+    `🔧 Git metadata needs approval: "${path}" is outside the checkout`,
+    path,
+    (value) => validRule(value, matchesPattern(path, [value]), `path "${path}"`),
+    timeoutSeconds,
+  );
+}
+
 export function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxConfig): void {
   if (!allowsAllDomains(config.network?.allowedDomains)) return;
   ctx.ui.notify(
