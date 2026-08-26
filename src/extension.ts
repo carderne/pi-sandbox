@@ -223,8 +223,7 @@ export default function (pi: ExtensionAPI) {
           path,
           allowWrite: effectiveWritePaths(ctx.cwd),
           denyWrite: config.filesystem?.denyWrite ?? [],
-          prompt: (path) =>
-            promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
+          prompt: (path) => promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
           saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
         });
         if (writePermission.action === "deny") {

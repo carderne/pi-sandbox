@@ -143,10 +143,7 @@ export async function showBashEscalationPrompt(
       if (timeoutMs !== undefined) {
         const deadlineMs = Date.now() + timeoutMs;
         remainingSeconds = permissionPromptRemainingSeconds(deadlineMs);
-        timeout = setTimeout(
-          () => finish({ action: "deny", reason: "timeout" }),
-          timeoutMs,
-        );
+        timeout = setTimeout(() => finish({ action: "deny", reason: "timeout" }), timeoutMs);
         countdown = setInterval(
           () => {
             const nextRemainingSeconds = permissionPromptRemainingSeconds(deadlineMs);
@@ -185,19 +182,13 @@ export async function showBashEscalationPrompt(
               safeWidth,
             ),
             "",
-            ...bodyLines.slice(
-              scrollOffset,
-              scrollOffset + MAX_ESCALATION_VIEWPORT_LINES,
-            ),
+            ...bodyLines.slice(scrollOffset, scrollOffset + MAX_ESCALATION_VIEWPORT_LINES),
             "",
           ];
           if (remainingSeconds !== undefined) {
             lines.push(
               ...wrapTextWithAnsi(
-                theme.fg(
-                  "warning",
-                  `⏳ Auto-deny in ${remainingSeconds}s (command stays inside pi-sandbox)`,
-                ),
+                theme.fg("warning", `⏳ Auto-deny in ${remainingSeconds}s (command will not run)`),
                 safeWidth,
               ),
             );
@@ -221,9 +212,7 @@ export async function showBashEscalationPrompt(
           }
           if (matchesKey(data, Key.enter)) {
             finish(
-              selectedIndex === 0
-                ? { action: "deny", reason: "user" }
-                : { action: "allow_once" },
+              selectedIndex === 0 ? { action: "deny", reason: "user" } : { action: "allow_once" },
             );
             return;
           }

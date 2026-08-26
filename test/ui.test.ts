@@ -116,15 +116,12 @@ test("Bash escalation is unavailable outside a local TUI without opening custom 
         },
       },
     } as unknown as ExtensionContext;
-    const result = await showBashEscalationPrompt(
-      { events: { emit() {} } } as never,
-      {
-        toolCallId: mode,
-        command: "pnpm install",
-        justification: "Need registry access?",
-        ctx,
-      },
-    );
+    const result = await showBashEscalationPrompt({ events: { emit() {} } } as never, {
+      toolCallId: mode,
+      command: "pnpm install",
+      justification: "Need registry access?",
+      ctx,
+    });
     assert.deepEqual(result, { action: "deny", reason: "unavailable" });
     assert.equal(customCalls, 0);
   }
@@ -211,10 +208,9 @@ const requestFor = (ctx: ExtensionContext, signal?: AbortSignal) => ({
 
 test("escalation prompt keeps fixed controls and scrolls through the complete safe command", async () => {
   const harness = createEscalationPromptHarness();
-  const command = Array.from(
-    { length: 120 },
-    (_, index) => `line-${index}-${"x".repeat(40)}`,
-  ).join("\n");
+  const command = Array.from({ length: 120 }, (_, index) => `line-${index}-${"x".repeat(40)}`).join(
+    "\n",
+  );
   const pending = showBashEscalationPrompt(harness.pi, {
     toolCallId: "long",
     command,

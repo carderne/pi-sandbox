@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
@@ -9,6 +8,7 @@ import {
   type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { type Component } from "@earendil-works/pi-tui";
+import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 
 import {
@@ -122,10 +122,7 @@ test("not-run results and tool abort errors are unambiguous", () => {
     result.content[0]?.type === "text" ? result.content[0].text : "",
     /not run outside pi-sandbox/i,
   );
-  assert.match(
-    result.content[0]?.type === "text" ? result.content[0].text : "",
-    /do not retry/i,
-  );
+  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /do not retry/i);
   assert.deepEqual(result.details, { escalation: { status: "denied" } });
   const abortError = createEscalationAbortError();
   assert.equal(isEscalationAbortError(abortError), true);
@@ -277,10 +274,7 @@ test("invalid escalation requests fail closed before prompting or execution", as
 });
 
 test("escalation is unavailable outside an interactive TUI before prompting or execution", async () => {
-  for (const ctx of [
-    rpcContext,
-    { mode: "tui", hasUI: false } as unknown as ExtensionContext,
-  ]) {
+  for (const ctx of [rpcContext, { mode: "tui", hasUI: false } as unknown as ExtensionContext]) {
     let promptCalls = 0;
     let executorCalls = 0;
     const result = await executeEscalatedBash({
@@ -347,11 +341,7 @@ test("approval delegates the exact command and timeout once and preserves Bash d
     fullOutputPath: "/tmp/full-output",
     escalation: { status: "approved_once" },
   });
-  assert.ok(
-    updates.every(
-      (update: any) => update.details?.escalation?.status === "approved_once",
-    ),
-  );
+  assert.ok(updates.every((update: any) => update.details?.escalation?.status === "approved_once"));
 });
 
 test("an approved local spawn failure propagates without retry", async () => {
@@ -743,10 +733,7 @@ test("Bash renderer delegates stripped inputs, preserves details, and updates du
   assert.equal(callLastComponents[0], undefined);
   assert.ok(resultLastComponents[0] instanceof MutableComponent);
   assert.match(resultComponent.render(100).join("\n"), /result:\/tmp\/full-output/);
-  assert.match(
-    callComponent.render(100).join("\n"),
-    /outside pi-sandbox — not run \(denied\)/,
-  );
+  assert.match(callComponent.render(100).join("\n"), /outside pi-sandbox — not run \(denied\)/);
   assert.doesNotMatch(callComponent.render(100).join("\n"), /approved once/);
 });
 
@@ -775,10 +762,7 @@ test("default Bash rendering is unchanged and has no escalation marker", () => {
 
 test("escalation markers use stable requested, approval, and not-run copy", () => {
   assert.equal(formatEscalationMarker("requested"), "outside pi-sandbox requested");
-  assert.equal(
-    formatEscalationMarker("approved_once"),
-    "outside pi-sandbox — approved once",
-  );
+  assert.equal(formatEscalationMarker("approved_once"), "outside pi-sandbox — approved once");
   for (const [status, suffix] of [
     ["denied", "denied"],
     ["cancelled", "cancelled"],
@@ -786,10 +770,7 @@ test("escalation markers use stable requested, approval, and not-run copy", () =
     ["unavailable", "unavailable"],
     ["invalid", "invalid"],
   ] as const) {
-    assert.equal(
-      formatEscalationMarker(status),
-      `outside pi-sandbox — not run (${suffix})`,
-    );
+    assert.equal(formatEscalationMarker(status), `outside pi-sandbox — not run (${suffix})`);
   }
 });
 

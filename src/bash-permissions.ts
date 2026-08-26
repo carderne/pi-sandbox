@@ -55,9 +55,7 @@ export interface EscalationPromptRequest {
   ctx: ExtensionContext;
 }
 
-export type EscalationPrompt = (
-  request: EscalationPromptRequest,
-) => Promise<EscalationDecision>;
+export type EscalationPrompt = (request: EscalationPromptRequest) => Promise<EscalationDecision>;
 
 export const BASH_ESCALATION_GUIDELINES = [
   "When using Bash, use the default sandbox first unless the operation is inherently known to require execution outside pi-sandbox.",
@@ -67,9 +65,7 @@ export const BASH_ESCALATION_GUIDELINES = [
   "For Bash escalation, do not claim the command ran unless the tool returns its actual command output.",
 ] as const;
 
-type JustificationValidation =
-  | { ok: true; justification: string }
-  | { ok: false; message: string };
+type JustificationValidation = { ok: true; justification: string } | { ok: false; message: string };
 
 export function validateEscalationJustification(value: unknown): JustificationValidation {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -84,9 +80,7 @@ export function validateEscalationJustification(value: unknown): JustificationVa
   return { ok: true, justification: value.trim() };
 }
 
-export function isEscalationRequest(
-  input: Pick<SandboxBashInput, "sandbox_permissions">,
-): boolean {
+export function isEscalationRequest(input: Pick<SandboxBashInput, "sandbox_permissions">): boolean {
   return input.sandbox_permissions === "require_escalated";
 }
 
@@ -255,10 +249,7 @@ export async function executeEscalatedBash(
     });
   } catch (error) {
     if (isEscalationAbortError(error)) throw error;
-    return createNotRunResult(
-      "unavailable",
-      "Bash escalation approval could not be displayed.",
-    );
+    return createNotRunResult("unavailable", "Bash escalation approval could not be displayed.");
   }
 
   if (decision.action === "deny") {
@@ -354,14 +345,10 @@ interface EscalationRendererState {
 }
 
 function unwrapEscalationComponent(component: Component | undefined): Component | undefined {
-  return component instanceof EscalationRenderComponent
-    ? component.getBaseComponent()
-    : component;
+  return component instanceof EscalationRenderComponent ? component.getBaseComponent() : component;
 }
 
-export function createEscalatingBashToolDefinition(
-  options: CreateEscalatingBashToolOptions,
-) {
+export function createEscalatingBashToolDefinition(options: CreateEscalatingBashToolOptions) {
   type BaseRenderCall = NonNullable<typeof options.base.renderCall>;
   type BaseRenderResult = NonNullable<typeof options.base.renderResult>;
   type BaseCallParameters = Parameters<BaseRenderCall>;
@@ -380,11 +367,7 @@ export function createEscalatingBashToolDefinition(
       lastComponent.updateMarker(status);
       return lastComponent;
     }
-    return new EscalationRenderComponent(
-      baseComponent,
-      (text) => theme.fg("dim", text),
-      status,
-    );
+    return new EscalationRenderComponent(baseComponent, (text) => theme.fg("dim", text), status);
   };
 
   const renderCall = options.base.renderCall
@@ -396,15 +379,11 @@ export function createEscalatingBashToolDefinition(
         const state = context.state as typeof context.state & EscalationRendererState;
         const status = isEscalationRequest(args) ? "requested" : undefined;
         state.escalationStatus = status;
-        const baseComponent = options.base.renderCall!(
-          stripEscalationFields(args),
-          theme,
-          {
-            ...context,
-            args: stripEscalationFields(context.args),
-            lastComponent: unwrapEscalationComponent(context.lastComponent),
-          },
-        );
+        const baseComponent = options.base.renderCall!(stripEscalationFields(args), theme, {
+          ...context,
+          args: stripEscalationFields(context.args),
+          lastComponent: unwrapEscalationComponent(context.lastComponent),
+        });
         if (!status) {
           state.escalationCallComponent = undefined;
           return baseComponent;
@@ -433,16 +412,11 @@ export function createEscalatingBashToolDefinition(
           state.escalationStatus = status;
           state.escalationCallComponent?.updateMarker(status);
         }
-        const baseComponent = options.base.renderResult!(
-          result,
-          renderOptions,
-          theme,
-          {
-            ...context,
-            args: stripEscalationFields(context.args),
-            lastComponent: unwrapEscalationComponent(context.lastComponent),
-          },
-        );
+        const baseComponent = options.base.renderResult!(result, renderOptions, theme, {
+          ...context,
+          args: stripEscalationFields(context.args),
+          lastComponent: unwrapEscalationComponent(context.lastComponent),
+        });
         if (!status) return baseComponent;
         const component = wrapRenderedComponent(
           baseComponent,
@@ -468,22 +442,10 @@ export function createEscalatingBashToolDefinition(
       ctx: ExtensionContext,
     ): Promise<AgentToolResult<SandboxBashDetails | undefined>> {
       if (!options.isSandboxActive()) {
-        return options.base.execute(
-          id,
-          stripEscalationFields(params),
-          signal,
-          onUpdate,
-          ctx,
-        );
+        return options.base.execute(id, stripEscalationFields(params), signal, onUpdate, ctx);
       }
       if (!isEscalationRequest(params)) {
-        return options.executeDefault(
-          id,
-          stripEscalationFields(params),
-          signal,
-          onUpdate,
-          ctx,
-        );
+        return options.executeDefault(id, stripEscalationFields(params), signal, onUpdate, ctx);
       }
       return executeEscalatedBash({
         toolCallId: id,
@@ -504,9 +466,7 @@ export function createEscalatingBashToolDefinition(
 
 export interface ApprovedBashCallTracker {
   markApproved(toolCallId: string): void;
-  handleToolResult(
-    event: ToolResultEvent,
-  ): { details: SandboxBashDetails } | undefined;
+  handleToolResult(event: ToolResultEvent): { details: SandboxBashDetails } | undefined;
 }
 
 export function createApprovedBashCallTracker(): ApprovedBashCallTracker {

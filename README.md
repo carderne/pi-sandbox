@@ -111,6 +111,55 @@ Alt+S                            toggle sandboxing on/off for the session
 /sandbox-allow write <path>      prompt to add a path to allowWrite
 ```
 
+### One-time Bash escalation
+
+Bash remains sandboxed by default. A normal tool call uses no escalation fields:
+
+```json
+{"command":"pnpm install"}
+```
+
+If that necessary command fails because of pi-sandbox, the model may make a new,
+explicit call:
+
+```json
+{
+  "command": "pnpm install",
+  "sandbox_permissions": "require_escalated",
+  "justification": "Allow pnpm to reach the registry and update its cache outside this workspace?"
+}
+```
+
+The retry is never automatic. **Allow once** applies only to that exact invocation;
+it does not normalize or edit the command, and no approval is remembered. A denied,
+cancelled, timed-out, or unavailable request must not be repeated without new user
+direction.
+
+Allowing the call runs it outside pi-sandbox. The command and its subprocesses bypass
+all pi-sandbox enforcement for `filesystem.allowRead`, `filesystem.denyRead`,
+`filesystem.allowWrite`, `filesystem.denyWrite`, `network.allowedDomains`, and
+`network.deniedDomains`, including the default broad-read protection for `/Users` and
+`/home`. It is not necessarily unrestricted: the operating system, a parent app
+sandbox, or a container may still deny access.
+
+Version 1 requires Pi's local TUI so the complete command can be shown in the custom
+approval component. RPC is unsupported even when it reports `hasUI: true`; JSON and
+print modes are also unsupported. In all of those modes, the request returns
+unavailable and executes nothing.
+
+Call history records whether execution outside pi-sandbox was requested, approved
+once, or not run. This metadata is not mixed into the command's stdout or stderr.
+Simultaneous escalation prompts are displayed FIFO, one at a time, while ordinary
+Bash calls remain parallel. The permission timeout starts only when a queued prompt
+becomes visible.
+
+Escape or Ctrl-C inside the approval prompt declines only that request and returns a
+stable cancelled result. Cancelling the tool or turn closes a queued or visible
+request, runs nothing, and preserves Pi's abort semantics. An abort observed after
+the extension's `execute()` starts includes an explicit error saying that the
+escalated command was not run. If Pi aborts a batch before calling extension
+`execute()`, it may instead return its generic `Operation aborted` result.
+
 ## What it does
 
 **Bash commands** are wrapped with `sandbox-exec` (macOS) or `bubblewrap`
