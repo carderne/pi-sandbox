@@ -1,6 +1,18 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  Input,
+  Key,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 
+import {
+  createEscalationAbortError,
+  type EscalationDecision,
+  type EscalationPromptRequest,
+} from "./bash-permissions.ts";
 import {
   DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
   getConfigPaths,
@@ -63,6 +75,187 @@ export function permissionOptions(cwd: string): PromptOption[] {
       hint: `→ ${globalPath}`,
     },
   ];
+}
+
+const MAX_ESCALATION_VIEWPORT_LINES = 12;
+
+export function escapeTerminalPromptText(value: string): string {
+  return [...value]
+    .map((character) => {
+      if (character === "\n") return "\\n";
+      if (character === "\r") return "\\r";
+      if (character === "\t") return "\\t";
+      if (/^[\p{Cc}\p{Cf}]$/u.test(character)) {
+        return `\\u{${character.codePointAt(0)!.toString(16)}}`;
+      }
+      return character;
+    })
+    .join("");
+}
+
+type EscalationPromptOutcome = EscalationDecision | { action: "tool_aborted" };
+
+export async function showBashEscalationPrompt(
+  pi: ExtensionAPI,
+  request: EscalationPromptRequest,
+): Promise<EscalationDecision> {
+  if (request.ctx.mode !== "tui" || !request.ctx.hasUI) {
+    return { action: "deny", reason: "unavailable" };
+  }
+  if (request.signal?.aborted) throw createEscalationAbortError();
+
+  pi.events.emit("request-attention", { message: "Bash escalation approval required" });
+
+  const safeJustification = escapeTerminalPromptText(request.justification);
+  const safeCommand = escapeTerminalPromptText(request.command);
+  const outcome = await request.ctx.ui.custom<EscalationPromptOutcome>(
+    (tui, theme, _keybindings, done) => {
+      let selectedIndex = 0;
+      let scrollOffset = 0;
+      let maxScrollOffset = 0;
+      let resolved = false;
+      let remainingSeconds: number | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let countdown: ReturnType<typeof setInterval> | undefined;
+
+      const clearPromptResources = (): void => {
+        if (timeout !== undefined) {
+          clearTimeout(timeout);
+          timeout = undefined;
+        }
+        if (countdown !== undefined) {
+          clearInterval(countdown);
+          countdown = undefined;
+        }
+        request.signal?.removeEventListener("abort", onAbort);
+      };
+      const finish = (result: EscalationPromptOutcome): void => {
+        if (resolved) return;
+        resolved = true;
+        clearPromptResources();
+        done(result);
+      };
+      const onAbort = (): void => finish({ action: "tool_aborted" });
+
+      request.signal?.addEventListener("abort", onAbort, { once: true });
+
+      const timeoutMs = permissionPromptTimeoutMs(request.timeoutSeconds);
+      if (timeoutMs !== undefined) {
+        const deadlineMs = Date.now() + timeoutMs;
+        remainingSeconds = permissionPromptRemainingSeconds(deadlineMs);
+        timeout = setTimeout(
+          () => finish({ action: "deny", reason: "timeout" }),
+          timeoutMs,
+        );
+        countdown = setInterval(
+          () => {
+            const nextRemainingSeconds = permissionPromptRemainingSeconds(deadlineMs);
+            if (nextRemainingSeconds === remainingSeconds) return;
+            remainingSeconds = nextRemainingSeconds;
+            tui.requestRender();
+          },
+          Math.min(1000, timeoutMs),
+        );
+      }
+
+      if (request.signal?.aborted) onAbort();
+
+      return {
+        render(width: number): string[] {
+          const safeWidth = Math.max(1, width);
+          const bodyLines = [
+            ...wrapTextWithAnsi("Justification:", safeWidth),
+            ...wrapTextWithAnsi(safeJustification, safeWidth),
+            "",
+            ...wrapTextWithAnsi("Command:", safeWidth),
+            ...wrapTextWithAnsi(safeCommand, safeWidth),
+          ];
+          maxScrollOffset = Math.max(0, bodyLines.length - MAX_ESCALATION_VIEWPORT_LINES);
+          scrollOffset = Math.min(scrollOffset, maxScrollOffset);
+
+          const deny = `${selectedIndex === 0 ? "→" : " "} Deny`;
+          const allow = `${selectedIndex === 1 ? "→" : " "} Allow once`;
+          const lines = [
+            ...wrapTextWithAnsi(theme.fg("warning", "Run outside pi-sandbox?"), safeWidth),
+            ...wrapTextWithAnsi(
+              theme.fg(
+                "warning",
+                "This command bypasses all pi-sandbox filesystem and network rules, including configured deny rules. Parent OS or container restrictions may still apply.",
+              ),
+              safeWidth,
+            ),
+            "",
+            ...bodyLines.slice(
+              scrollOffset,
+              scrollOffset + MAX_ESCALATION_VIEWPORT_LINES,
+            ),
+            "",
+          ];
+          if (remainingSeconds !== undefined) {
+            lines.push(
+              ...wrapTextWithAnsi(
+                theme.fg(
+                  "warning",
+                  `⏳ Auto-deny in ${remainingSeconds}s (command stays inside pi-sandbox)`,
+                ),
+                safeWidth,
+              ),
+            );
+          }
+          lines.push(
+            truncateToWidth(`${deny}    ${allow}`, safeWidth),
+            truncateToWidth(
+              theme.fg(
+                "dim",
+                "←→ choose, enter confirm, ↑↓/page up/page down scroll, esc/ctrl+c cancel",
+              ),
+              safeWidth,
+            ),
+          );
+          return lines;
+        },
+        handleInput(data: string): void {
+          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+            finish({ action: "deny", reason: "cancelled" });
+            return;
+          }
+          if (matchesKey(data, Key.enter)) {
+            finish(
+              selectedIndex === 0
+                ? { action: "deny", reason: "user" }
+                : { action: "allow_once" },
+            );
+            return;
+          }
+          if (matchesKey(data, Key.left) || matchesKey(data, Key.right)) {
+            selectedIndex = matchesKey(data, Key.left) ? 0 : 1;
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+            const delta = matchesKey(data, Key.up) ? -1 : 1;
+            scrollOffset = Math.max(0, Math.min(maxScrollOffset, scrollOffset + delta));
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown)) {
+            const delta = matchesKey(data, Key.pageUp)
+              ? -MAX_ESCALATION_VIEWPORT_LINES
+              : MAX_ESCALATION_VIEWPORT_LINES;
+            scrollOffset = Math.max(0, Math.min(maxScrollOffset, scrollOffset + delta));
+            tui.requestRender();
+          }
+        },
+        invalidate(): void {},
+        dispose(): void {
+          finish({ action: "deny", reason: "unavailable" });
+        },
+      };
+    },
+  );
+
+  if (outcome?.action === "tool_aborted") throw createEscalationAbortError();
+  return outcome ?? { action: "deny", reason: "unavailable" };
 }
 
 export async function showPermissionPrompt(
