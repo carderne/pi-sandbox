@@ -139,3 +139,71 @@ export function createEscalationAbortError(): BashEscalationAbortError {
 export function isEscalationAbortError(error: unknown): error is BashEscalationAbortError {
   return error instanceof BashEscalationAbortError;
 }
+
+export interface EscalationPromptQueue {
+  enqueue(request: EscalationPromptRequest): Promise<EscalationDecision>;
+}
+
+interface QueueEntry {
+  request: EscalationPromptRequest;
+  resolve: (decision: EscalationDecision) => void;
+  reject: (error: unknown) => void;
+  removeQueuedAbortListener?: () => void;
+}
+
+export function createEscalationPromptQueue(prompt: EscalationPrompt): EscalationPromptQueue {
+  const pending: QueueEntry[] = [];
+  let active = false;
+
+  const pump = (): void => {
+    if (active) return;
+    const entry = pending.shift();
+    if (!entry) return;
+
+    entry.removeQueuedAbortListener?.();
+    if (entry.request.signal?.aborted) {
+      entry.reject(createEscalationAbortError());
+      queueMicrotask(pump);
+      return;
+    }
+
+    active = true;
+    Promise.resolve()
+      .then(() => prompt(entry.request))
+      .then(
+        (decision) => {
+          active = false;
+          pump();
+          entry.resolve(decision);
+        },
+        (error) => {
+          active = false;
+          pump();
+          entry.reject(error);
+        },
+      );
+  };
+
+  return {
+    enqueue(request) {
+      if (request.signal?.aborted) return Promise.reject(createEscalationAbortError());
+
+      return new Promise<EscalationDecision>((resolve, reject) => {
+        const entry: QueueEntry = { request, resolve, reject };
+        const onQueuedAbort = (): void => {
+          const index = pending.indexOf(entry);
+          if (index === -1) return;
+          pending.splice(index, 1);
+          reject(createEscalationAbortError());
+        };
+        if (request.signal) {
+          request.signal.addEventListener("abort", onQueuedAbort, { once: true });
+          entry.removeQueuedAbortListener = () =>
+            request.signal?.removeEventListener("abort", onQueuedAbort);
+        }
+        pending.push(entry);
+        pump();
+      });
+    },
+  };
+}
