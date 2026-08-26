@@ -1,19 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  type AgentToolResult,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
 
 import {
   createEscalationAbortError,
   createEscalationPromptQueue,
   createNotRunResult,
+  executeEscalatedBash,
   isEscalationAbortError,
   isEscalationRequest,
   sandboxBashSchema,
   stripEscalationFields,
   validateEscalationJustification,
   withEscalationStatus,
+  type BashExecutor,
   type EscalationDecision,
+  type EscalationPromptQueue,
 } from "../src/bash-permissions.ts";
 
 test("sandbox Bash schema remains backward compatible and accepts known permissions", () => {
@@ -210,4 +217,286 @@ test("every prompt settlement advances the escalation queue", async () => {
     { action: "deny", reason: "user" },
   );
   assert.deepEqual(visible, ["broken", "next"]);
+});
+
+const tuiContext = { mode: "tui", hasUI: true } as unknown as ExtensionContext;
+const rpcContext = { mode: "rpc", hasUI: true } as unknown as ExtensionContext;
+const textContent = (result: AgentToolResult<unknown>): string =>
+  result.content
+    .filter(
+      (item): item is Extract<(typeof result.content)[number], { type: "text" }> =>
+        item.type === "text",
+    )
+    .map((item) => item.text)
+    .join("\n");
+const allowQueue: EscalationPromptQueue = {
+  enqueue: async () => ({ action: "allow_once" }),
+};
+
+test("invalid escalation requests fail closed before prompting or execution", async () => {
+  const invalidJustifications = [undefined, " \n\t ", "🧪".repeat(501)] as const;
+  for (const justification of invalidJustifications) {
+    let promptCalls = 0;
+    const queue: EscalationPromptQueue = {
+      enqueue: async () => {
+        promptCalls++;
+        return { action: "deny", reason: "user" };
+      },
+    };
+    const executorCalls: unknown[][] = [];
+    const executeLocal: BashExecutor = async (...args) => {
+      executorCalls.push(args);
+      return { content: [{ type: "text", text: "unexpected" }], details: undefined };
+    };
+    const result = await executeEscalatedBash({
+      toolCallId: "invalid",
+      input: {
+        command: "never-run",
+        sandbox_permissions: "require_escalated",
+        justification,
+      },
+      ctx: rpcContext,
+      queue,
+      executeLocal,
+    });
+    assert.equal(promptCalls, 0);
+    assert.equal(executorCalls.length, 0);
+    assert.match(textContent(result), /not run outside pi-sandbox/i);
+    assert.equal(result.details?.escalation?.status, "invalid");
+  }
+});
+
+test("escalation is unavailable outside an interactive TUI before prompting or execution", async () => {
+  for (const ctx of [
+    rpcContext,
+    { mode: "tui", hasUI: false } as unknown as ExtensionContext,
+  ]) {
+    let promptCalls = 0;
+    let executorCalls = 0;
+    const result = await executeEscalatedBash({
+      toolCallId: "unavailable",
+      input: {
+        command: "never-run",
+        sandbox_permissions: "require_escalated",
+        justification: "Need local access?",
+      },
+      ctx,
+      queue: {
+        enqueue: async () => {
+          promptCalls++;
+          return { action: "allow_once" };
+        },
+      },
+      executeLocal: async () => {
+        executorCalls++;
+        return { content: [], details: undefined };
+      },
+    });
+    assert.equal(promptCalls, 0);
+    assert.equal(executorCalls, 0);
+    assert.equal(result.details?.escalation?.status, "unavailable");
+    assert.match(textContent(result), /not run outside pi-sandbox/i);
+  }
+});
+
+test("approval delegates the exact command and timeout once and preserves Bash details", async () => {
+  const calls: unknown[][] = [];
+  const updates: unknown[] = [];
+  const approvedIds: string[] = [];
+  const executeLocal: BashExecutor = async (...args) => {
+    calls.push(args);
+    args[3]?.({
+      content: [{ type: "text", text: "partial" }],
+      details: { fullOutputPath: "/tmp/full-output" },
+    });
+    return {
+      content: [{ type: "text", text: "done" }],
+      details: { fullOutputPath: "/tmp/full-output" },
+    };
+  };
+  const result = await executeEscalatedBash({
+    toolCallId: "approved",
+    input: {
+      command: "printf '$HOME'",
+      timeout: 17,
+      sandbox_permissions: "require_escalated",
+      justification: "Need the exact local environment?",
+    },
+    ctx: tuiContext,
+    queue: allowQueue,
+    executeLocal,
+    onUpdate: (update) => updates.push(update),
+    onApproved: (toolCallId) => approvedIds.push(toolCallId),
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(approvedIds, ["approved"]);
+  assert.deepEqual(calls[0]?.[1], { command: "printf '$HOME'", timeout: 17 });
+  assert.equal(result.content[0]?.type === "text" ? result.content[0].text : "", "done");
+  assert.deepEqual(result.details, {
+    fullOutputPath: "/tmp/full-output",
+    escalation: { status: "approved_once" },
+  });
+  assert.ok(
+    updates.every(
+      (update: any) => update.details?.escalation?.status === "approved_once",
+    ),
+  );
+});
+
+test("an approved local spawn failure propagates without retry", async () => {
+  const approvedIds: string[] = [];
+  let executorCalls = 0;
+  const spawnError = new Error("spawn failed");
+  await assert.rejects(
+    executeEscalatedBash({
+      toolCallId: "spawn-error",
+      input: {
+        command: "exact",
+        sandbox_permissions: "require_escalated",
+        justification: "Need local execution?",
+      },
+      ctx: tuiContext,
+      queue: allowQueue,
+      executeLocal: async () => {
+        executorCalls++;
+        throw spawnError;
+      },
+      onApproved: (toolCallId) => approvedIds.push(toolCallId),
+    }),
+    (error) => error === spawnError,
+  );
+  assert.equal(executorCalls, 1);
+  assert.deepEqual(approvedIds, ["spawn-error"]);
+});
+
+test("every non-approval decision returns a stable not-run result", async () => {
+  const deniedCases = [
+    [{ action: "deny", reason: "user" }, "denied"],
+    [{ action: "deny", reason: "timeout" }, "timed_out"],
+    [{ action: "deny", reason: "cancelled" }, "cancelled"],
+    [{ action: "deny", reason: "unavailable" }, "unavailable"],
+  ] as const;
+
+  for (const [decision, status] of deniedCases) {
+    let executorCalls = 0;
+    const result = await executeEscalatedBash({
+      toolCallId: status,
+      input: {
+        command: "never-run",
+        sandbox_permissions: "require_escalated",
+        justification: "Need local execution?",
+      },
+      ctx: tuiContext,
+      queue: { enqueue: async () => decision },
+      executeLocal: async () => {
+        executorCalls++;
+        return { content: [], details: undefined };
+      },
+    });
+    assert.equal(executorCalls, 0);
+    assert.equal(result.details?.escalation?.status, status);
+    assert.match(textContent(result), /not run outside pi-sandbox/i);
+    assert.match(textContent(result), /do not retry/i);
+  }
+});
+
+test("abort races before local delegation never execute the command", async () => {
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  const rejectedByQueue = new AbortController();
+  const approvedThenAborted = new AbortController();
+  let executorCalls = 0;
+  const executeLocal: BashExecutor = async () => {
+    executorCalls++;
+    return { content: [], details: undefined };
+  };
+  const input = {
+    command: "never-run",
+    sandbox_permissions: "require_escalated" as const,
+    justification: "Need local execution?",
+  };
+
+  await assert.rejects(
+    executeEscalatedBash({
+      toolCallId: "already-aborted",
+      input,
+      signal: alreadyAborted.signal,
+      ctx: tuiContext,
+      queue: allowQueue,
+      executeLocal,
+    }),
+    /aborted.*escalated command was not run/i,
+  );
+  await assert.rejects(
+    executeEscalatedBash({
+      toolCallId: "queue-aborted",
+      input,
+      signal: rejectedByQueue.signal,
+      ctx: tuiContext,
+      queue: {
+        enqueue: async () => {
+          rejectedByQueue.abort();
+          throw createEscalationAbortError();
+        },
+      },
+      executeLocal,
+    }),
+    /aborted.*escalated command was not run/i,
+  );
+  await assert.rejects(
+    executeEscalatedBash({
+      toolCallId: "approved-then-aborted",
+      input,
+      signal: approvedThenAborted.signal,
+      ctx: tuiContext,
+      queue: {
+        enqueue: async () => {
+          approvedThenAborted.abort();
+          return { action: "allow_once" };
+        },
+      },
+      executeLocal,
+    }),
+    /aborted.*escalated command was not run/i,
+  );
+  assert.equal(executorCalls, 0);
+});
+
+test("prompt infrastructure failures fail closed while typed aborts propagate", async () => {
+  let executorCalls = 0;
+  let approvalCalls = 0;
+  const options = {
+    toolCallId: "prompt-failure",
+    input: {
+      command: "never-run",
+      sandbox_permissions: "require_escalated" as const,
+      justification: "Need local execution?",
+    },
+    ctx: tuiContext,
+    executeLocal: async () => {
+      executorCalls++;
+      return { content: [], details: undefined };
+    },
+    onApproved: () => {
+      approvalCalls++;
+    },
+  };
+
+  const result = await executeEscalatedBash({
+    ...options,
+    queue: { enqueue: async () => Promise.reject(new Error("render failed")) },
+  });
+  assert.equal(result.details?.escalation?.status, "unavailable");
+  assert.match(textContent(result), /not run outside pi-sandbox/i);
+  assert.match(textContent(result), /do not retry/i);
+  await assert.rejects(
+    executeEscalatedBash({
+      ...options,
+      queue: { enqueue: async () => Promise.reject(createEscalationAbortError()) },
+    }),
+    /aborted.*escalated command was not run/i,
+  );
+  assert.equal(executorCalls, 0);
+  assert.equal(approvalCalls, 0);
 });

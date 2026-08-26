@@ -1,5 +1,6 @@
 import {
   type AgentToolResult,
+  type AgentToolUpdateCallback,
   type BashToolDetails,
   type BashToolInput,
   type ExtensionContext,
@@ -206,4 +207,85 @@ export function createEscalationPromptQueue(prompt: EscalationPrompt): Escalatio
       });
     },
   };
+}
+
+export type BashExecutor = (
+  toolCallId: string,
+  input: BashToolInput,
+  signal: AbortSignal | undefined,
+  onUpdate: AgentToolUpdateCallback<BashToolDetails | undefined> | undefined,
+  ctx: ExtensionContext,
+) => Promise<AgentToolResult<BashToolDetails | undefined>>;
+
+export interface ExecuteEscalatedBashOptions {
+  toolCallId: string;
+  input: SandboxBashInput;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback<SandboxBashDetails | undefined>;
+  ctx: ExtensionContext;
+  promptTimeoutSeconds?: number;
+  queue: EscalationPromptQueue;
+  executeLocal: BashExecutor;
+  onApproved?: (toolCallId: string) => void;
+}
+
+export async function executeEscalatedBash(
+  options: ExecuteEscalatedBashOptions,
+): Promise<AgentToolResult<SandboxBashDetails | undefined>> {
+  if (options.signal?.aborted) throw createEscalationAbortError();
+  const validation = validateEscalationJustification(options.input.justification);
+  if (!validation.ok) return createNotRunResult("invalid", validation.message);
+  if (options.ctx.mode !== "tui" || !options.ctx.hasUI) {
+    return createNotRunResult("unavailable");
+  }
+
+  let decision: EscalationDecision;
+  try {
+    decision = await options.queue.enqueue({
+      toolCallId: options.toolCallId,
+      command: options.input.command,
+      justification: validation.justification,
+      timeoutSeconds: options.promptTimeoutSeconds,
+      signal: options.signal,
+      ctx: options.ctx,
+    });
+  } catch (error) {
+    if (isEscalationAbortError(error)) throw error;
+    return createNotRunResult(
+      "unavailable",
+      "Bash escalation approval could not be displayed.",
+    );
+  }
+
+  if (decision.action === "deny") {
+    const status = {
+      user: "denied",
+      timeout: "timed_out",
+      cancelled: "cancelled",
+      unavailable: "unavailable",
+    } as const;
+    return createNotRunResult(status[decision.reason]);
+  }
+
+  if (options.signal?.aborted) throw createEscalationAbortError();
+  const approved = "approved_once" as const;
+  options.onApproved?.(options.toolCallId);
+  options.onUpdate?.({ content: [], details: withEscalationStatus(undefined, approved) });
+
+  const forwardUpdate: AgentToolUpdateCallback<BashToolDetails | undefined> | undefined =
+    options.onUpdate
+      ? (update) =>
+          options.onUpdate?.({
+            ...update,
+            details: withEscalationStatus(update.details, approved),
+          })
+      : undefined;
+  const result = await options.executeLocal(
+    options.toolCallId,
+    stripEscalationFields(options.input),
+    options.signal,
+    forwardUpdate,
+    options.ctx,
+  );
+  return { ...result, details: withEscalationStatus(result.details, approved) };
 }
