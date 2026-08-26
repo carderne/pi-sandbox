@@ -18,13 +18,13 @@
 - Escalation is available only while pi-sandbox is active and both `ctx.mode === "tui"` and `ctx.hasUI` are true. RPC, JSON, and print modes fail closed without calling `ctx.ui.custom()` or either executor.
 - `justification` is runtime-required for escalation, must contain non-whitespace text, and must contain at most 500 Unicode code points. It is ignored on ordinary calls.
 - Every invalid, unavailable, denied, timed-out, and prompt-cancelled result must state that the command was not run outside pi-sandbox and must tell Bash not to retry without new user direction.
-- A tool `AbortSignal` before process spawn must throw an error containing `aborted` and `escalated command was not run`; Escape/Ctrl-C inside the prompt returns a stable cancelled result instead.
+- Once extension `execute()` begins, a tool `AbortSignal` before process spawn must throw an error containing `aborted` and `escalated command was not run`; Escape/Ctrl-C inside the prompt returns a stable cancelled result instead. Pi may instead return its generic `Operation aborted` result when it observes an aborted batch before invoking extension `execute()`; neither path may invoke an executor.
 - Serialize escalation prompts with a cancellation-aware FIFO queue. Keep ordinary Bash calls parallel, bind every decision to its own tool-call ID and exact command, and start the permission timeout only when that prompt becomes visible.
 - The prompt must safely escape C0/C1 controls, DEL, ANSI escape bytes, bidirectional/format controls, and zero-width controls; keep fixed headers/actions around a bounded scrollable viewport; and execute the original string rather than its display form.
 - Approval bypasses every pi-sandbox filesystem and network rule, including deny rules and the default `/Users` and `/home` read protection. UI and documentation must say “outside pi-sandbox,” because parent OS/container restrictions may remain.
 - Escalated calls skip the fine-grained Bash domain preflight and blocked-write recovery. Default calls retain both.
 - Do not change the `!command`/`user_bash` flow and do not add a configuration migration, approval-policy setting, or persistent approval state in v1.
-- Preserve Pi's Bash command/timeout call rendering, output/result rendering, streaming, process-tree cancellation after spawn, and `truncation`/`fullOutputPath` details. Escalation metadata belongs only in `details`, never stdout/stderr.
+- Preserve Pi's Bash command/timeout call rendering, output/result rendering, streaming, process-tree cancellation after spawn, and `truncation`/`fullOutputPath` details. Escalation metadata belongs only in `details`, never stdout/stderr, and approved local failures must regain `approved_once` details in the final `tool_result` event.
 - Add `typebox` as a direct runtime dependency; do not rely on Pi's transitive copy.
 - Tests must inject prompt and executor fakes. Never execute a genuinely unsandboxed fixture command in the automated suite.
 
@@ -39,7 +39,7 @@
 - Modify: `pnpm-lock.yaml`
 
 **Interfaces:**
-- Produces: `sandboxBashSchema`, `SandboxBashInput`, `BashEscalationStatus`, `SandboxBashDetails`, `EscalationDecision`, `EscalationPromptRequest`, `EscalationPrompt`, `validateEscalationJustification()`, `stripEscalationFields()`, `withEscalationStatus()`, `createNotRunResult()`, and `createEscalationAbortError()`.
+- Produces: `sandboxBashSchema`, `SandboxBashInput`, `BashEscalationStatus`, `SandboxBashDetails`, `EscalationDecision`, `EscalationPromptRequest`, `EscalationPrompt`, `BashEscalationAbortError`, `validateEscalationJustification()`, `stripEscalationFields()`, `withEscalationStatus()`, `createNotRunResult()`, `createEscalationAbortError()`, and `isEscalationAbortError()`.
 - Produces: `isEscalationRequest(input: Pick<SandboxBashInput, "sandbox_permissions">): boolean`, used by the Bash tool router and `tool_call` domain preflight.
 
 - [ ] **Step 1: Add TypeBox as a direct runtime dependency**
@@ -66,6 +66,7 @@ import {
   createEscalationAbortError,
   createNotRunResult,
   isEscalationRequest,
+  isEscalationAbortError,
   sandboxBashSchema,
   stripEscalationFields,
   validateEscalationJustification,
@@ -98,6 +99,7 @@ test("runtime justification validation counts Unicode code points", () => {
   assert.equal(validateEscalationJustification(" \n\t ").ok, false);
   assert.equal(validateEscalationJustification("🧪".repeat(500)).ok, true);
   assert.equal(validateEscalationJustification("🧪".repeat(501)).ok, false);
+  assert.equal(validateEscalationJustification(` ${"x".repeat(499)} `).ok, false);
   assert.deepEqual(validateEscalationJustification("  Need registry access?  "), {
     ok: true,
     justification: "Need registry access?",
@@ -159,7 +161,10 @@ test("not-run results and tool abort errors are unambiguous", () => {
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /not run outside pi-sandbox/i);
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /do not retry/i);
   assert.deepEqual(result.details, { escalation: { status: "denied" } });
-  assert.match(createEscalationAbortError().message, /aborted.*escalated command was not run/i);
+  const abortError = createEscalationAbortError();
+  assert.equal(isEscalationAbortError(abortError), true);
+  assert.equal(isEscalationAbortError(new Error(abortError.message)), false);
+  assert.match(abortError.message, /aborted.*escalated command was not run/i);
 });
 ```
 
@@ -250,14 +255,13 @@ export function validateEscalationJustification(value: unknown): JustificationVa
   if (typeof value !== "string" || value.trim().length === 0) {
     return { ok: false, message: "Bash escalation requires a non-blank justification." };
   }
-  const justification = value.trim();
-  if ([...justification].length > MAX_JUSTIFICATION_CODE_POINTS) {
+  if ([...value].length > MAX_JUSTIFICATION_CODE_POINTS) {
     return {
       ok: false,
       message: `Bash escalation justification must be at most ${MAX_JUSTIFICATION_CODE_POINTS} Unicode code points.`,
     };
   }
-  return { ok: true, justification };
+  return { ok: true, justification: value.trim() };
 }
 
 export function isEscalationRequest(
@@ -295,8 +299,19 @@ export function createNotRunResult(
   return { content: [{ type: "text", text }], details: withEscalationStatus(undefined, status) };
 }
 
-export function createEscalationAbortError(): Error {
-  return new Error("aborted: escalated command was not run outside pi-sandbox");
+export class BashEscalationAbortError extends Error {
+  constructor() {
+    super("aborted: escalated command was not run outside pi-sandbox");
+    this.name = "BashEscalationAbortError";
+  }
+}
+
+export function createEscalationAbortError(): BashEscalationAbortError {
+  return new BashEscalationAbortError();
+}
+
+export function isEscalationAbortError(error: unknown): error is BashEscalationAbortError {
+  return error instanceof BashEscalationAbortError;
 }
 ```
 
@@ -644,7 +659,10 @@ Use the harness in tests with these assertions:
 ```ts
 test("escalation prompt keeps fixed controls and scrolls through the complete safe command", async () => {
   const harness = createEscalationPromptHarness();
-  const command = Array.from({ length: 30 }, (_, index) => `line-${index}`).join("\n");
+  const command = Array.from(
+    { length: 120 },
+    (_, index) => `line-${index}-${"x".repeat(40)}`,
+  ).join("\n");
   const pending = showBashEscalationPrompt(harness.pi, {
     toolCallId: "long",
     command,
@@ -660,11 +678,12 @@ test("escalation prompt keeps fixed controls and scrolls through the complete sa
   assert.match(first, /Allow once/);
   assert.match(first, /Deny/);
   assert.match(first, /line-0/);
-  assert.doesNotMatch(first, /line-29/);
+  assert.doesNotMatch(first, /line-119/);
 
-  for (let index = 0; index < 40; index++) harness.input(Key.down);
+  for (let index = 0; index < 240; index++) harness.input(Key.down);
   const last = harness.render(48).join("\n");
-  assert.match(last, /line-29/);
+  assert.match(last, /line-119/);
+  assert.doesNotMatch(last, /line-0-/);
   assert.match(last, /Allow once/);
   assert.match(last, /Deny/);
   harness.input(Key.escape);
@@ -796,7 +815,7 @@ git commit -m "feat: prompt for one-time bash escalation"
 **Interfaces:**
 - Consumes: the validation, queue, result, metadata, and strip helpers from Tasks 1–2.
 - Produces: `BashExecutor` and `executeEscalatedBash(options: ExecuteEscalatedBashOptions): Promise<AgentToolResult<SandboxBashDetails | undefined>>`.
-- `ExecuteEscalatedBashOptions` includes the tool-call ID, `SandboxBashInput`, signal, update callback, extension context, visible-prompt timeout, queue, and injected local executor.
+- `ExecuteEscalatedBashOptions` includes the tool-call ID, `SandboxBashInput`, signal, update callback, extension context, visible-prompt timeout, queue, injected local executor, and an `onApproved(toolCallId)` callback used to preserve metadata through Pi-created error results.
 
 - [ ] **Step 1: Write failing tests for invalid and unavailable requests**
 
@@ -830,7 +849,7 @@ const queue: EscalationPromptQueue = {
 const executorCalls: unknown[][] = [];
 const executeLocal: BashExecutor = async (...args) => {
   executorCalls.push(args);
-  return { content: [{ type: "text", text: "unexpected" }] };
+  return { content: [{ type: "text", text: "unexpected" }], details: undefined };
 };
 const result = await executeEscalatedBash({
   toolCallId: "invalid",
@@ -855,6 +874,7 @@ Add tests with an injected queue returning `{ action: "allow_once" }`:
 test("approval delegates the exact command and timeout once and preserves Bash details", async () => {
   const calls: unknown[][] = [];
   const updates: unknown[] = [];
+  const approvedIds: string[] = [];
   const executeLocal: BashExecutor = async (...args) => {
     calls.push(args);
     args[3]?.({
@@ -878,9 +898,11 @@ test("approval delegates the exact command and timeout once and preserves Bash d
     queue: allowQueue,
     executeLocal,
     onUpdate: (update) => updates.push(update),
+    onApproved: (toolCallId) => approvedIds.push(toolCallId),
   });
 
   assert.equal(calls.length, 1);
+  assert.deepEqual(approvedIds, ["approved"]);
   assert.deepEqual(calls[0]?.[1], { command: "printf '$HOME'", timeout: 17 });
   assert.equal(result.content[0]?.type === "text" ? result.content[0].text : "", "done");
   assert.deepEqual(result.details, {
@@ -895,7 +917,7 @@ test("approval delegates the exact command and timeout once and preserves Bash d
 });
 ```
 
-Add a second test where `executeLocal` throws `new Error("spawn failed")`; assert the same error is propagated and `executeLocal` was called once. There must be no sandbox executor in this interface, which makes fallback or blocked-write retry impossible on the escalated path.
+Add a second test where `executeLocal` throws `new Error("spawn failed")`; assert the same error is propagated, `onApproved("spawn-error")` ran immediately before delegation, and `executeLocal` was called once. There must be no sandbox executor in this interface, which makes fallback or blocked-write retry impossible on the escalated path. Task 5 will prove the approval record is merged back into Pi's final error result.
 
 - [ ] **Step 3: Write failing denial and cancellation-race tests**
 
@@ -917,6 +939,10 @@ For each, assert neither executor is invoked, the content says the command was n
 - signal aborted by the fake queue immediately before returning `{ action: "allow_once" }`.
 
 Each abort must reject with `/aborted.*escalated command was not run/i` and leave the executor call count at zero.
+
+The already-aborted router test covers the contract once extension `execute()` has been entered and must use valid TUI input so cancellation wins before validation or mode gating. Task 6 documents the earlier Pi-owned case: if Pi's batch signal is already aborted after `tool_call` preflight, agent-core may return its own `Operation aborted` result without invoking this router; the shared safety invariant is that neither executor runs.
+
+Also add a prompt-infrastructure failure case. Its queue rejects with `new Error("render failed")`; assert the router returns status `unavailable`, its text includes both `not run outside pi-sandbox` and `do not retry`, and no executor or approval callback runs. Repeat with `createEscalationAbortError()` and assert that the typed abort is rethrown instead of converted.
 
 - [ ] **Step 4: Run focused tests to verify they fail**
 
@@ -950,6 +976,7 @@ export interface ExecuteEscalatedBashOptions {
   promptTimeoutSeconds?: number;
   queue: EscalationPromptQueue;
   executeLocal: BashExecutor;
+  onApproved?: (toolCallId: string) => void;
 }
 ```
 
@@ -959,21 +986,30 @@ Implement this order exactly:
 export async function executeEscalatedBash(
   options: ExecuteEscalatedBashOptions,
 ): Promise<AgentToolResult<SandboxBashDetails | undefined>> {
+  if (options.signal?.aborted) throw createEscalationAbortError();
   const validation = validateEscalationJustification(options.input.justification);
   if (!validation.ok) return createNotRunResult("invalid", validation.message);
   if (options.ctx.mode !== "tui" || !options.ctx.hasUI) {
     return createNotRunResult("unavailable");
   }
-  if (options.signal?.aborted) throw createEscalationAbortError();
 
-  const decision = await options.queue.enqueue({
-    toolCallId: options.toolCallId,
-    command: options.input.command,
-    justification: validation.justification,
-    timeoutSeconds: options.promptTimeoutSeconds,
-    signal: options.signal,
-    ctx: options.ctx,
-  });
+  let decision: EscalationDecision;
+  try {
+    decision = await options.queue.enqueue({
+      toolCallId: options.toolCallId,
+      command: options.input.command,
+      justification: validation.justification,
+      timeoutSeconds: options.promptTimeoutSeconds,
+      signal: options.signal,
+      ctx: options.ctx,
+    });
+  } catch (error) {
+    if (isEscalationAbortError(error)) throw error;
+    return createNotRunResult(
+      "unavailable",
+      "Bash escalation approval could not be displayed.",
+    );
+  }
 
   if (decision.action === "deny") {
     const status = {
@@ -987,6 +1023,7 @@ export async function executeEscalatedBash(
 
   if (options.signal?.aborted) throw createEscalationAbortError();
   const approved = "approved_once" as const;
+  options.onApproved?.(options.toolCallId);
   options.onUpdate?.({ content: [], details: withEscalationStatus(undefined, approved) });
 
   const forwardUpdate: AgentToolUpdateCallback<BashToolDetails | undefined> | undefined =
@@ -1041,7 +1078,9 @@ git commit -m "feat: route approved bash calls outside sandbox"
 - Consumes: `createBashToolDefinition()` from Pi and all Task 1–4 escalation interfaces.
 - Produces: `createEscalatingBashToolDefinition(options)`, which returns the expanded Bash tool while delegating ordinary execution and Pi rendering through injected definitions/callbacks.
 - Produces: durable call/result marker copy via `formatEscalationMarker(status)`.
-- `CreateEscalatingBashToolOptions` contains `base`, `label`, `isSandboxActive()`, `executeDefault`, `promptQueue`, and `getPromptTimeoutSeconds(ctx)` with the exact signatures below.
+- Produces: `createApprovedBashCallTracker()`, whose `markApproved(toolCallId)` and `handleToolResult(event)` methods restore `approved_once` details to Pi-created final error results and delete each record at `tool_result`.
+- Produces: `shouldPreflightBashDomains(input: SandboxBashInput): boolean`, the tested predicate used directly by the extension's `tool_call` handler.
+- `CreateEscalatingBashToolOptions` contains `base`, `label`, `isSandboxActive()`, `executeDefault`, `promptQueue`, `getPromptTimeoutSeconds(ctx)`, and `onApproved(toolCallId)` with the exact signatures below.
 
 - [ ] **Step 1: Write failing tool-routing and prompt-guideline tests**
 
@@ -1057,13 +1096,17 @@ export interface CreateEscalatingBashToolOptions {
   executeDefault: BashExecutor;
   promptQueue: EscalationPromptQueue;
   getPromptTimeoutSeconds: (ctx: ExtensionContext) => number | undefined;
+  onApproved?: (toolCallId: string) => void;
 }
 ```
 
 Add these concrete test helpers; `createToolHarness()` composes the same public options rather than reaching into extension state:
 
 ```ts
-const textResult = (text: string) => ({ content: [{ type: "text" as const, text }] });
+const textResult = (text: string) => ({
+  content: [{ type: "text" as const, text }],
+  details: undefined,
+});
 
 const fakeBashDefinition = (
   execute: ReturnType<typeof createBashToolDefinition>["execute"],
@@ -1141,16 +1184,21 @@ test("active default Bash uses the existing sandbox path without prompting", asy
     isSandboxActive: true,
     onLocal: () => calls.push("local"),
     onDefault: (input) => calls.push(`sandbox:${input.command}`),
-    onPrompt: () => calls.push("prompt"),
+    onPrompt: () => {
+      calls.push("prompt");
+      return { action: "deny", reason: "user" };
+    },
   });
-  await tool.execute(
-    "default",
-    { command: "pnpm test", sandbox_permissions: "use_default", justification: "ignored" },
-    undefined,
-    undefined,
-    tuiContext,
-  );
-  assert.deepEqual(calls, ["sandbox:pnpm test"]);
+  for (const sandbox_permissions of [undefined, "use_default"] as const) {
+    await tool.execute(
+      `default-${sandbox_permissions ?? "omitted"}`,
+      { command: "pnpm test", sandbox_permissions, justification: "ignored" },
+      undefined,
+      undefined,
+      tuiContext,
+    );
+  }
+  assert.deepEqual(calls, ["sandbox:pnpm test", "sandbox:pnpm test"]);
 });
 
 test("active escalated Bash prompts and invokes only the local path", async () => {
@@ -1181,6 +1229,8 @@ test("active escalated Bash prompts and invokes only the local path", async () =
 
 The harness must also assert all five flattened guideline strings name “Bash” and that `executionMode` is not changed to `"sequential"`.
 
+Add a table test for `shouldPreflightBashDomains()`: omitted and `use_default` return `true`, while `require_escalated` returns `false` with either valid or missing justification. Combined with the factory tests above, this proves invalid escalation cannot open a fine-grained domain prompt or enter blocked-write recovery, while both default forms still select the existing callback.
+
 - [ ] **Step 2: Write failing renderer-delegation and durable-marker tests**
 
 Use a fake base renderer that records its arguments and reuses `context.lastComponent`. Assert:
@@ -1191,6 +1241,34 @@ Use a fake base renderer that records its arguments and reuses `context.lastComp
 - Marker text is `outside pi-sandbox requested`, `outside pi-sandbox — approved once`, or `outside pi-sandbox — not run (denied|cancelled|timed out|unavailable|invalid)` as appropriate.
 - A restored denied result never contains `approved once`.
 - A default call/result has no escalation marker and renders exactly the base component's lines.
+- The test must mirror Pi's real renderer order: call `renderCall()` first, then `renderResult()`, and inspect the original call component without calling `renderCall()` a second time. Its marker must already reflect the final result.
+
+Add a tracker test that marks `spawn-error`, feeds `handleToolResult()` a Bash error event with `details: undefined`, and asserts the returned details are `{ escalation: { status: "approved_once" } }` while content and `isError` remain untouched. Feed the same event a second time and assert `undefined` is returned, proving cleanup. Also assert unrelated tool IDs and non-Bash results are ignored, and that existing `truncation`/`fullOutputPath` details survive the merge.
+
+Use this concrete error-result case:
+
+```ts
+import type { ToolResultEvent } from "@earendil-works/pi-coding-agent";
+
+test("approved Bash failures retain their marker through Pi's final tool_result", () => {
+  const tracker = createApprovedBashCallTracker();
+  tracker.markApproved("spawn-error");
+  const event = {
+    type: "tool_result",
+    toolName: "bash",
+    toolCallId: "spawn-error",
+    input: { command: "pnpm install" },
+    content: [{ type: "text", text: "spawn failed" }],
+    details: undefined,
+    isError: true,
+  } satisfies ToolResultEvent;
+
+  assert.deepEqual(tracker.handleToolResult(event), {
+    details: { escalation: { status: "approved_once" } },
+  });
+  assert.equal(tracker.handleToolResult(event), undefined);
+});
+```
 
 Use `component.render(100).join("\n")` for output assertions and pass a minimal theme fake whose `fg()` and `bold()` return their text unchanged.
 
@@ -1208,11 +1286,13 @@ Expected: FAIL because the Bash definition wrapper is not exported.
 
 In `src/bash-permissions.ts`:
 
-1. Import `Container`, `Text`, and the Pi `ToolDefinition`/render context types.
+1. Import `Container` and `Text`, plus Pi's public `ToolResultEvent` type and `isBashToolResult()` guard for the approval tracker. Return `{ details: SandboxBashDetails } | undefined` from the tracker; `ToolResultEventResult` and `ToolRenderContext` are not exported from the package root. Derive renderer parameter types with `Parameters<NonNullable<typeof options.base.renderCall>>` and the corresponding `renderResult` type instead of importing private types.
 2. Define a private `EscalationRenderComponent extends Container` holding its current `baseComponent` and `markerComponent`.
 3. Before delegating a base renderer, unwrap `context.lastComponent` when it is an `EscalationRenderComponent`; this preserves Pi's `Text.setText()` and Bash result component reuse instead of handing Pi the outer container.
-4. Store `escalationStatus?: BashEscalationStatus` alongside Pi's opaque renderer state via an intersection cast. Update it from partial/final result details and use it in both wrappers.
-5. When there is no marker, return the base component directly. When there is a marker, return/rebuild the outer container with the base component followed by a dim marker `Text`. Never insert marker text into `AgentToolResult.content`.
+4. Store `escalationStatus?: BashEscalationStatus` and the current call wrapper alongside Pi's opaque renderer state via an intersection cast. `renderCall()` sets `requested` from `sandbox_permissions`; `renderResult()` updates state from partial/final details and directly replaces the saved call wrapper's marker text before it returns. This handles Pi's call-then-result render order without waiting for another render cycle.
+5. When there is no marker, return the base component directly. When there is a marker, return/rebuild the outer container with the base component followed by a dim marker `Text`. Give the wrapper an `updateMarker(status)` method so `renderResult()` can update the already-created call component. Never insert marker text into `AgentToolResult.content`.
+6. Implement `createApprovedBashCallTracker()` with a private `Set<string>`. `markApproved()` inserts immediately before local delegation. `handleToolResult()` accepts Pi's public `ToolResultEvent`, returns nothing unless `isBashToolResult(event)` and the ID is present, deletes the ID before returning, and returns `{ details: withEscalationStatus(event.details, "approved_once") }`. A string comparison is insufficient because Pi's custom-result union also has `toolName: string` and would leave `details` typed as `unknown`.
+7. Implement `shouldPreflightBashDomains()` as the named inverse of `isEscalationRequest()`. The extension handler must call this tested predicate rather than duplicate the condition inline.
 
 Define exact marker copy:
 
@@ -1249,23 +1329,25 @@ return executeEscalatedBash({
   promptTimeoutSeconds: options.getPromptTimeoutSeconds(ctx),
   queue: options.promptQueue,
   executeLocal: options.base.execute.bind(options.base),
+  onApproved: options.onApproved,
 });
 ```
 
-Spread `options.base`, then override `label`, `parameters`, `promptGuidelines`, `execute`, `renderCall`, and `renderResult`. Do not set `executionMode`; Pi's default parallel behavior must remain in force.
+Spread `options.base`, then override `label`, `parameters`, `promptGuidelines: [...BASH_ESCALATION_GUIDELINES]`, `execute`, `renderCall`, and `renderResult`. Copying the readonly guideline tuple keeps the returned `ToolDefinition.promptGuidelines` assignable to Pi's mutable `string[]` API. Do not set `executionMode`; Pi's default parallel behavior must remain in force.
 
 - [ ] **Step 5: Replace the inline Bash registration with the wrapper**
 
 In `src/extension.ts`:
 
-1. Import `createEscalatingBashToolDefinition`, `createEscalationPromptQueue`, `isEscalationRequest`, `SandboxBashInput`, and the executor types.
+1. Import `createApprovedBashCallTracker`, `createEscalatingBashToolDefinition`, `createEscalationPromptQueue`, `SandboxBashInput`, `shouldPreflightBashDomains`, and the executor types.
 2. Import `showBashEscalationPrompt` from `src/ui.ts`.
-3. Create one extension-lifetime queue:
+3. Create one extension-lifetime queue and one approved-call tracker:
 
 ```ts
 const escalationPromptQueue = createEscalationPromptQueue((request) =>
   showBashEscalationPrompt(pi, request),
 );
+const approvedBashCalls = createApprovedBashCallTracker();
 ```
 
 4. Move the body of the current registered Bash `execute()` into a local `executeDefaultBash` callback. Keep its `runBash()`, OS-restriction conversion, blocked-write extraction, prompt, sandbox refresh, and one retry byte-for-byte in behavior. Its parameters are already stripped `BashToolInput`, so escalation fields never reach blocked-write recovery.
@@ -1280,11 +1362,13 @@ pi.registerTool(
     executeDefault: executeDefaultBash,
     promptQueue: escalationPromptQueue,
     getPromptTimeoutSeconds: (ctx) => loadConfig(ctx.cwd).permissionPromptTimeoutSeconds,
+    onApproved: approvedBashCalls.markApproved,
   }),
 );
 ```
 
-6. In the Bash branch of the `tool_call` handler, cast `event.input` to `SandboxBashInput` and return before domain extraction when `isEscalationRequest(input)` is true. Do this before any `promptDomainBlock()` call. Validation and TUI availability remain the execution router's responsibility, so an invalid escalation cannot fall through to a fine-grained prompt and then execute.
+6. Register `pi.on("tool_result", (event) => approvedBashCalls.handleToolResult(event))`. Pi agent-core replaces thrown tool errors with a fresh error result whose details are empty; this hook restores the already-recorded approval status to that final result and clears the ID for both successful and failed local calls.
+7. In the Bash branch of the `tool_call` handler, cast `event.input` to `SandboxBashInput` and return before domain extraction when `shouldPreflightBashDomains(input)` is false. Do this before any `promptDomainBlock()` call. Validation and TUI availability remain the execution router's responsibility, so an invalid escalation cannot fall through to a fine-grained prompt and then execute.
 
 This wiring ensures an escalated call cannot enter either the default domain preflight or default blocked-write recovery, while omitted/`use_default` calls retain both.
 
@@ -1298,7 +1382,7 @@ pnpm exec tsx --test test/ui.test.ts test/policy.test.ts test/sandbox-runtime.te
 pnpm run check
 ```
 
-Expected: PASS. Executor spies show zero execution on every non-approval path and one local call on approval.
+Expected: PASS. Executor spies show zero execution on every non-approval path and one local call on approval. The tracker test proves a thrown approved call still has an approved-once marker in its final/restored result.
 
 - [ ] **Step 7: Commit extension integration**
 
@@ -1351,7 +1435,7 @@ Document these facts exactly:
 - Call history shows requested, approved-once, or not-run status without mixing that status into command output.
 - Simultaneous escalation prompts are displayed FIFO, one at a time; ordinary Bash commands remain parallel.
 - Escape/Ctrl-C inside the prompt declines only that request and returns a stable cancelled result.
-- Cancelling the tool/turn closes a queued or visible request, runs nothing, and preserves Pi's abort semantics.
+- Cancelling the tool/turn closes a queued or visible request, runs nothing, and preserves Pi's abort semantics. An abort observed after extension `execute()` starts includes the explicit escalated-command non-run error; a batch Pi aborts before calling extension `execute()` may instead report Pi's generic `Operation aborted`.
 - Permission timeout begins only once a queued prompt is visible.
 
 - [ ] **Step 4: Run the complete automated verification suite**
@@ -1383,7 +1467,7 @@ Then verify:
 3. Request escalation for that exact blocked command, inspect the complete command, select **Deny**, and confirm history says not run and no output claims success.
 4. Repeat the exact request, select **Allow once**, and confirm local output appears once with the approved-once marker.
 5. Start two escalation requests in one model response, verify only one approval component is visible, deny the first, and confirm the second prompt shows its own exact command.
-6. Dismiss one prompt with Escape and cancel one at the tool/turn level; confirm neither command runs and their outcomes remain distinct.
+6. Dismiss one prompt with Escape and cancel one at the tool/turn level; confirm neither command runs and their outcomes remain distinct. Record whether Pi observed the tool cancellation before or after extension `execute()` began so the generic versus explicit abort copy is interpreted correctly.
 7. In RPC or print mode, issue a valid escalation request and confirm it returns unavailable without opening a prompt or executing the command.
 
 Record any Pi invocation detail needed for repeatability in the PR testing notes, not in production code.
@@ -1401,10 +1485,12 @@ Confirm from the diff that:
 - no automatic failure parser selects escalation;
 - no persistent approval state or shell prefix parser exists;
 - non-TUI and every non-approval path invoke no executor;
+- unexpected prompt/render failures become the stable unavailable/non-run result, while typed tool-abort errors retain abort semantics;
 - the escalated path delegates only to `localBash.execute()` and never to sandbox retry code;
 - the original command and timeout are the values delegated;
 - all five prompt guidelines explicitly name Bash;
 - metadata merges retain Pi truncation/full-output fields;
+- approved local errors regain `approved_once` details in the final `tool_result` event;
 - no test launches a real unsandboxed command.
 
 - [ ] **Step 7: Commit documentation and final formatting**

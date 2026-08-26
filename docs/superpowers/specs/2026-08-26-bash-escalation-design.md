@@ -144,7 +144,7 @@ The project should import TypeBox directly to define this schema and therefore a
 
 The registered tool continues to spread Pi's `createBashToolDefinition` result so its name, output accumulator, streaming updates, truncation behavior, and ordinary timeout behavior are retained. It overrides the parameter schema, prompt guidance, label, execution router, and call rendering, and narrowly wraps result rendering. The call renderer preserves Pi's command and timeout display while adding a durable escalation marker. The result wrapper updates the shared render state from escalation metadata and then delegates to Pi's existing Bash result renderer unchanged. The marker progresses from **outside pi-sandbox requested** to either **outside pi-sandbox — approved once** or **outside pi-sandbox — not run (`reason`)**. It must never label a denied or unavailable request as approved.
 
-The router and its wrapped update callback merge escalation metadata into Bash details without replacing truncation or full-output metadata. After **Allow once** and the final pre-spawn abort check, the router emits/records `approved_once` before delegating, and the marker remains even if local process creation or execution later fails. Default Bash calls have no escalation metadata and render exactly as they do today.
+The router and its wrapped update callback merge escalation metadata into Bash details without replacing truncation or full-output metadata. After **Allow once** and the final pre-spawn abort check, the router emits/records `approved_once` before delegating. Because Pi replaces a thrown tool error with a fresh result whose details are empty, the extension also tracks approved tool-call IDs until `tool_result` and merges `approved_once` into that final result. The marker therefore remains even if local process creation or execution later fails and after the session is restored. Default Bash calls have no escalation metadata and render exactly as they do today.
 
 The router has two explicit paths:
 
@@ -182,7 +182,7 @@ Pi executes tool calls in parallel by default. The extension therefore maintains
 
 Only escalated execution is queued. Ordinary Bash retains Pi's parallel behavior, and the existing domain/path `tool_call` prompts already run during Pi's sequential preflight phase. Setting the entire Bash tool to `executionMode: "sequential"` would unnecessarily serialize ordinary commands and is not part of this design.
 
-A queued request whose signal aborts is removed without opening a prompt or invoking an executor. The permission timeout starts only when that request becomes visible, not while it waits behind another prompt. Every resolution path releases the active slot in `finally`-equivalent cleanup so denial, timeout, cancellation, disposal, or rendering failure cannot block later requests.
+A queued request whose signal aborts is removed without opening a prompt or invoking an executor. The permission timeout starts only when that request becomes visible, not while it waits behind another prompt. Every resolution path releases the active slot in `finally`-equivalent cleanup so denial, timeout, cancellation, disposal, or rendering failure cannot block later requests. Unexpected prompt construction or rendering failures become the stable `unavailable` non-run result; only a recognized tool-abort error propagates as an abort.
 
 The prompt returns a discriminated result such as:
 
@@ -203,7 +203,7 @@ The prompt reuses `permissionPromptTimeoutSeconds` and the existing `request-att
 Prompt dismissal and tool cancellation have different semantics:
 
 - Escape or Ctrl-C handled by the approval component is a user denial with reason `cancelled`. It returns the stable non-run result and does not abort the surrounding agent turn.
-- If the tool's `AbortSignal` is already aborted, aborts while queued, or aborts while the prompt is visible, the request closes/removes itself, invokes neither executor, and throws a Pi-compatible error whose message includes `aborted` and `escalated command was not run`.
+- Once the extension's Bash `execute()` has begun, if the tool's `AbortSignal` is already aborted, aborts while queued, or aborts while the prompt is visible, the request closes/removes itself, invokes neither executor, and throws a Pi-compatible error whose message includes `aborted` and `escalated command was not run`. Pi may short-circuit an already-aborted batch after `tool_call` preflight and before invoking `execute()`; that earlier core-owned path returns Pi's generic `Operation aborted` result and still runs neither executor.
 - After **Allow once**, the router checks the signal once more immediately before delegating. An abort that wins this race prevents process creation and follows the same error path.
 - Once the local process has been spawned, Pi's local Bash implementation owns signal handling and preserves its existing process-tree cancellation behavior.
 
@@ -211,7 +211,7 @@ This split gives the model an explicit result for a declined prompt while preser
 
 ## Failure semantics
 
-Every non-spawn path produces text that clearly says the command was not run outside the sandbox. Prompt-level non-approval returns a stable tool result and tells the model not to repeat the request without new user direction. Tool-level abort throws an explicit Pi-compatible error containing the same non-run fact so Pi can preserve cancellation semantics.
+Every extension-owned non-spawn path produces text that clearly says the command was not run outside the sandbox. Prompt-level non-approval returns a stable tool result and tells the model not to repeat the request without new user direction. Tool-level abort observed after extension `execute()` begins throws an explicit Pi-compatible error containing the same non-run fact so Pi can preserve cancellation semantics. The only exception is the documented Pi-owned pre-`execute()` abort, whose generic result is outside the extension's control.
 
 | Condition | Result |
 | --- | --- |
@@ -221,7 +221,9 @@ Every non-spawn path produces text that clearly says the command was not run out
 | User denies | Escalation denied; command not run. |
 | Prompt expires after becoming visible | Escalation timed out; command not run. |
 | User dismisses prompt with Escape/Ctrl-C | Escalation cancelled by user; stable result; command not run. |
-| Tool signal aborts before process spawn | Close/remove prompt, throw an explicit aborted/non-run error, and preserve Pi's surrounding cancellation semantics. |
+| Tool signal aborts after extension `execute()` begins but before process spawn | Close/remove prompt, throw an explicit aborted/non-run error, and preserve Pi's surrounding cancellation semantics. |
+| Pi observes an aborted batch before extension `execute()` begins | Pi returns its generic `Operation aborted` result; neither executor runs. |
+| Prompt construction or rendering fails | Escalation unavailable; stable non-run result; advance the queue. |
 | User approves | Return Pi's normal streamed Bash result, including exit status behavior and truncation metadata. |
 | Local execution fails after approval | Return/throw the same failure Pi's normal local Bash tool would; do not fall back to sandboxed execution and do not retry. |
 
@@ -277,7 +279,7 @@ Unit and integration-style tests should prove the safety boundary, not merely th
 - Two simultaneous escalation requests display FIFO, and each decision is bound to the exact command that was visible.
 - Aborting a queued request removes only that request and does not disturb the active or subsequent prompt.
 - A queued prompt's permission timeout starts when it becomes visible, and every resolution path advances the queue.
-- Signal abort before prompting, while queued, while visible, and immediately after approval invokes no executor and produces the explicit aborted/non-run error.
+- Signal abort observed after extension `execute()` begins—before prompting, while queued, while visible, and immediately after approval—invokes no executor and produces the explicit aborted/non-run error. A core-owned abort before `execute()` returns Pi's generic abort result and also invokes no executor.
 - Signal abort after process spawn is delegated to Pi's local Bash behavior.
 
 Use injected executor and prompt fakes for these tests; never run a genuinely unsandboxed fixture command as part of the test suite.
@@ -291,7 +293,8 @@ Use injected executor and prompt fakes for these tests; never run a genuinely un
 - Escape and Ctrl-C return prompt-level cancellation without aborting the agent turn.
 - Timeout, disposal, lost TUI, and tool-signal abort fail closed with their specified distinct semantics.
 - Timers/listeners are cleaned up after every resolution path.
-- The render wrappers retain Pi's command/timeout and Bash-result behavior, preserve truncation/full-output details when merging escalation metadata, and show the correct requested, approved-once, or not-run marker.
+- The render wrappers retain Pi's command/timeout and Bash-result behavior, preserve truncation/full-output details when merging escalation metadata, and show the correct requested, approved-once, or not-run marker. Tests mirror Pi's call-then-result renderer order and inspect the already-created call component without requiring another render cycle.
+- Approved local failures receive `approved_once` details through the final `tool_result` hook so live and restored history retain the marker.
 - `require_escalated` calls remain visibly marked in live and restored session history without calling denied requests approved.
 
 ### Regression verification
