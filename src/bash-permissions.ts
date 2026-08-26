@@ -4,7 +4,11 @@ import {
   type BashToolDetails,
   type BashToolInput,
   type ExtensionContext,
+  createBashToolDefinition,
+  isBashToolResult,
+  type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 
 export const MAX_JUSTIFICATION_CODE_POINTS = 500;
@@ -288,4 +292,241 @@ export async function executeEscalatedBash(
     options.ctx,
   );
   return { ...result, details: withEscalationStatus(result.details, approved) };
+}
+
+export interface CreateEscalatingBashToolOptions {
+  base: ReturnType<typeof createBashToolDefinition>;
+  label: string;
+  isSandboxActive: () => boolean;
+  executeDefault: BashExecutor;
+  promptQueue: EscalationPromptQueue;
+  getPromptTimeoutSeconds: (ctx: ExtensionContext) => number | undefined;
+  onApproved?: (toolCallId: string) => void;
+}
+
+export function formatEscalationMarker(status: BashEscalationStatus): string {
+  switch (status) {
+    case "requested":
+      return "outside pi-sandbox requested";
+    case "approved_once":
+      return "outside pi-sandbox — approved once";
+    case "timed_out":
+      return "outside pi-sandbox — not run (timed out)";
+    default:
+      return `outside pi-sandbox — not run (${status})`;
+  }
+}
+
+class EscalationRenderComponent extends Container {
+  readonly markerComponent = new Text("", 0, 0);
+
+  constructor(
+    private baseComponent: Component,
+    private readonly formatDim: (text: string) => string,
+    status: BashEscalationStatus,
+  ) {
+    super();
+    this.addChild(baseComponent);
+    this.addChild(this.markerComponent);
+    this.updateMarker(status);
+  }
+
+  getBaseComponent(): Component {
+    return this.baseComponent;
+  }
+
+  updateBaseComponent(component: Component): void {
+    if (component === this.baseComponent) return;
+    this.baseComponent = component;
+    this.clear();
+    this.addChild(component);
+    this.addChild(this.markerComponent);
+  }
+
+  updateMarker(status: BashEscalationStatus): void {
+    this.markerComponent.setText(`\n${this.formatDim(formatEscalationMarker(status))}`);
+  }
+}
+
+interface EscalationRendererState {
+  escalationStatus?: BashEscalationStatus;
+  escalationCallComponent?: EscalationRenderComponent;
+}
+
+function unwrapEscalationComponent(component: Component | undefined): Component | undefined {
+  return component instanceof EscalationRenderComponent
+    ? component.getBaseComponent()
+    : component;
+}
+
+export function createEscalatingBashToolDefinition(
+  options: CreateEscalatingBashToolOptions,
+) {
+  type BaseRenderCall = NonNullable<typeof options.base.renderCall>;
+  type BaseRenderResult = NonNullable<typeof options.base.renderResult>;
+  type BaseCallParameters = Parameters<BaseRenderCall>;
+  type BaseResultParameters = Parameters<BaseRenderResult>;
+  type RenderContext = BaseCallParameters[2];
+  type ExtendedRenderContext = Omit<RenderContext, "args"> & { args: SandboxBashInput };
+
+  const wrapRenderedComponent = (
+    baseComponent: Component,
+    status: BashEscalationStatus,
+    theme: BaseCallParameters[1],
+    lastComponent: Component | undefined,
+  ): EscalationRenderComponent => {
+    if (lastComponent instanceof EscalationRenderComponent) {
+      lastComponent.updateBaseComponent(baseComponent);
+      lastComponent.updateMarker(status);
+      return lastComponent;
+    }
+    return new EscalationRenderComponent(
+      baseComponent,
+      (text) => theme.fg("dim", text),
+      status,
+    );
+  };
+
+  const renderCall = options.base.renderCall
+    ? (
+        args: SandboxBashInput,
+        theme: BaseCallParameters[1],
+        context: ExtendedRenderContext,
+      ): Component => {
+        const state = context.state as typeof context.state & EscalationRendererState;
+        const status = isEscalationRequest(args) ? "requested" : undefined;
+        state.escalationStatus = status;
+        const baseComponent = options.base.renderCall!(
+          stripEscalationFields(args),
+          theme,
+          {
+            ...context,
+            args: stripEscalationFields(context.args),
+            lastComponent: unwrapEscalationComponent(context.lastComponent),
+          },
+        );
+        if (!status) {
+          state.escalationCallComponent = undefined;
+          return baseComponent;
+        }
+        const component = wrapRenderedComponent(
+          baseComponent,
+          status,
+          theme,
+          context.lastComponent,
+        );
+        state.escalationCallComponent = component;
+        return component;
+      }
+    : undefined;
+
+  const renderResult = options.base.renderResult
+    ? (
+        result: AgentToolResult<SandboxBashDetails | undefined>,
+        renderOptions: BaseResultParameters[1],
+        theme: BaseResultParameters[2],
+        context: ExtendedRenderContext,
+      ): Component => {
+        const state = context.state as typeof context.state & EscalationRendererState;
+        const status = result.details?.escalation?.status ?? state.escalationStatus;
+        if (status) {
+          state.escalationStatus = status;
+          state.escalationCallComponent?.updateMarker(status);
+        }
+        const baseComponent = options.base.renderResult!(
+          result,
+          renderOptions,
+          theme,
+          {
+            ...context,
+            args: stripEscalationFields(context.args),
+            lastComponent: unwrapEscalationComponent(context.lastComponent),
+          },
+        );
+        if (!status) return baseComponent;
+        const component = wrapRenderedComponent(
+          baseComponent,
+          status,
+          theme,
+          context.lastComponent,
+        );
+        state.escalationCallComponent = component;
+        return component;
+      }
+    : undefined;
+
+  return {
+    ...options.base,
+    label: options.label,
+    parameters: sandboxBashSchema,
+    promptGuidelines: [...BASH_ESCALATION_GUIDELINES],
+    async execute(
+      id: string,
+      params: SandboxBashInput,
+      signal: AbortSignal | undefined,
+      onUpdate: AgentToolUpdateCallback<SandboxBashDetails | undefined> | undefined,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult<SandboxBashDetails | undefined>> {
+      if (!options.isSandboxActive()) {
+        return options.base.execute(
+          id,
+          stripEscalationFields(params),
+          signal,
+          onUpdate,
+          ctx,
+        );
+      }
+      if (!isEscalationRequest(params)) {
+        return options.executeDefault(
+          id,
+          stripEscalationFields(params),
+          signal,
+          onUpdate,
+          ctx,
+        );
+      }
+      return executeEscalatedBash({
+        toolCallId: id,
+        input: params,
+        signal,
+        onUpdate,
+        ctx,
+        promptTimeoutSeconds: options.getPromptTimeoutSeconds(ctx),
+        queue: options.promptQueue,
+        executeLocal: options.base.execute.bind(options.base),
+        onApproved: options.onApproved,
+      });
+    },
+    renderCall,
+    renderResult,
+  };
+}
+
+export interface ApprovedBashCallTracker {
+  markApproved(toolCallId: string): void;
+  handleToolResult(
+    event: ToolResultEvent,
+  ): { details: SandboxBashDetails } | undefined;
+}
+
+export function createApprovedBashCallTracker(): ApprovedBashCallTracker {
+  const approvedToolCallIds = new Set<string>();
+  return {
+    markApproved(toolCallId) {
+      approvedToolCallIds.add(toolCallId);
+    },
+    handleToolResult(event) {
+      if (!isBashToolResult(event) || !approvedToolCallIds.has(event.toolCallId)) {
+        return undefined;
+      }
+      approvedToolCallIds.delete(event.toolCallId);
+      return {
+        details: withEscalationStatus(event.details, "approved_once"),
+      };
+    },
+  };
+}
+
+export function shouldPreflightBashDomains(input: SandboxBashInput): boolean {
+  return !isEscalationRequest(input);
 }
