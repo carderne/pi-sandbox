@@ -39,7 +39,8 @@
     "ci:test": "pnpm test"
   },
   "dependencies": {
-    "@carderne/sandbox-runtime": "^0.0.70"
+    "@carderne/sandbox-runtime": "^0.0.70",
+    "typebox": "^1.1.38"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.0",
