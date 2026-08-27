@@ -82,6 +82,7 @@ const MAX_ESCALATION_VIEWPORT_LINES = 12;
 export function escapeTerminalPromptText(value: string): string {
   return [...value]
     .map((character) => {
+      if (character === "\\") return "\\\\";
       if (character === "\n") return "\\n";
       if (character === "\r") return "\\r";
       if (character === "\t") return "\\t";
@@ -194,8 +195,9 @@ export async function showBashEscalationPrompt(
             );
           }
           lines.push(
-            truncateToWidth(`${deny}    ${allow}`, safeWidth),
-            truncateToWidth(
+            ...wrapTextWithAnsi(deny, safeWidth),
+            ...wrapTextWithAnsi(allow, safeWidth),
+            ...wrapTextWithAnsi(
               theme.fg(
                 "dim",
                 "←→ choose, enter confirm, ↑↓/page up/page down scroll, esc/ctrl+c cancel",

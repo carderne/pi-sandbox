@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 
-import { createApprovedBashCallTracker } from "../src/bash-permissions.ts";
+import { createBashEscalationCallTracker } from "../src/bash-permissions.ts";
 import { registerBashEscalationHooks } from "../src/extension.ts";
 
 type ToolCallHandler = (
@@ -29,7 +29,7 @@ function createHookHarness() {
   } as Pick<ExtensionAPI, "on">;
   const promptedDomains: string[] = [];
   const appliedDomains: string[] = [];
-  const approvedBashCalls = createApprovedBashCallTracker();
+  const bashEscalationCalls = createBashEscalationCallTracker();
 
   registerBashEscalationHooks(pi, {
     isSandboxActive: () => true,
@@ -42,13 +42,13 @@ function createHookHarness() {
     applyDomainChoice: async (_choice, value) => {
       appliedDomains.push(value);
     },
-    approvedBashCalls,
+    bashEscalationCalls,
   });
 
   assert.ok(toolCallHandler);
   assert.ok(toolResultHandler);
   return {
-    approvedBashCalls,
+    bashEscalationCalls,
     appliedDomains,
     promptedDomains,
     toolCallHandler,
@@ -111,21 +111,30 @@ test("default Bash calls retain domain preflight for omitted and use_default per
   assert.deepEqual(harness.appliedDomains, []);
 });
 
-test("registered Bash result hook restores approved metadata and consumes tracker state", () => {
+test("registered Bash result hook restores terminal metadata and consumes tracker state", () => {
   const harness = createHookHarness();
-  harness.approvedBashCalls.markApproved("approved-call");
-  const event = {
-    type: "tool_result",
-    toolName: "bash",
-    toolCallId: "approved-call",
-    input: { command: "pnpm install" },
-    content: [{ type: "text", text: "spawn failed" }],
-    details: undefined,
-    isError: true,
-  } satisfies ToolResultEvent;
+  for (const [toolCallId, mark, status] of [
+    [
+      "approved-call",
+      () => harness.bashEscalationCalls.markApproved("approved-call"),
+      "approved_once",
+    ],
+    ["aborted-call", () => harness.bashEscalationCalls.markAborted("aborted-call"), "aborted"],
+  ] as const) {
+    mark();
+    const event = {
+      type: "tool_result",
+      toolName: "bash",
+      toolCallId,
+      input: { command: "pnpm install" },
+      content: [{ type: "text", text: "tool failed" }],
+      details: undefined,
+      isError: true,
+    } satisfies ToolResultEvent;
 
-  assert.deepEqual(harness.toolResultHandler(event), {
-    details: { escalation: { status: "approved_once" } },
-  });
-  assert.equal(harness.toolResultHandler(event), undefined);
+    assert.deepEqual(harness.toolResultHandler(event), {
+      details: { escalation: { status } },
+    });
+    assert.equal(harness.toolResultHandler(event), undefined);
+  }
 });

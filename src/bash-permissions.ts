@@ -32,6 +32,7 @@ export type SandboxBashInput = Static<typeof sandboxBashSchema>;
 export type BashEscalationStatus =
   | "requested"
   | "approved_once"
+  | "aborted"
   | "denied"
   | "cancelled"
   | "timed_out"
@@ -225,12 +226,18 @@ export interface ExecuteEscalatedBashOptions {
   queue: EscalationPromptQueue;
   executeLocal: BashExecutor;
   onApproved?: (toolCallId: string) => void;
+  onAborted?: (toolCallId: string) => void;
 }
 
 export async function executeEscalatedBash(
   options: ExecuteEscalatedBashOptions,
 ): Promise<AgentToolResult<SandboxBashDetails | undefined>> {
-  if (options.signal?.aborted) throw createEscalationAbortError();
+  const throwAborted = (): never => {
+    options.onAborted?.(options.toolCallId);
+    throw createEscalationAbortError();
+  };
+
+  if (options.signal?.aborted) throwAborted();
   const validation = validateEscalationJustification(options.input.justification);
   if (!validation.ok) return createNotRunResult("invalid", validation.message);
   if (options.ctx.mode !== "tui" || !options.ctx.hasUI) {
@@ -248,7 +255,7 @@ export async function executeEscalatedBash(
       ctx: options.ctx,
     });
   } catch (error) {
-    if (isEscalationAbortError(error)) throw error;
+    if (isEscalationAbortError(error)) throwAborted();
     return createNotRunResult("unavailable", "Bash escalation approval could not be displayed.");
   }
 
@@ -262,7 +269,7 @@ export async function executeEscalatedBash(
     return createNotRunResult(status[decision.reason]);
   }
 
-  if (options.signal?.aborted) throw createEscalationAbortError();
+  if (options.signal?.aborted) throwAborted();
   const approved = "approved_once" as const;
   options.onApproved?.(options.toolCallId);
   options.onUpdate?.({ content: [], details: withEscalationStatus(undefined, approved) });
@@ -293,6 +300,7 @@ export interface CreateEscalatingBashToolOptions {
   promptQueue: EscalationPromptQueue;
   getPromptTimeoutSeconds: (ctx: ExtensionContext) => number | undefined;
   onApproved?: (toolCallId: string) => void;
+  onAborted?: (toolCallId: string) => void;
 }
 
 export function formatEscalationMarker(status: BashEscalationStatus): string {
@@ -410,7 +418,16 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
         context: ExtendedRenderContext,
       ): Component => {
         const state = context.state as typeof context.state & EscalationRendererState;
-        const status = result.details?.escalation?.status ?? state.escalationStatus;
+        const isPiPreExecutionAbort =
+          isEscalationRequest(context.args) &&
+          context.isError &&
+          result.details?.escalation === undefined &&
+          result.content.length === 1 &&
+          result.content[0]?.type === "text" &&
+          result.content[0].text === "Operation aborted";
+        const status =
+          result.details?.escalation?.status ??
+          (isPiPreExecutionAbort ? "aborted" : state.escalationStatus);
         state.escalationStatus = status;
         state.escalationCallComponent?.updateMarker(status);
         const baseComponent = options.base.renderResult!(result, renderOptions, theme, {
@@ -450,6 +467,7 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
         queue: options.promptQueue,
         executeLocal: options.base.execute.bind(options.base),
         onApproved: options.onApproved,
+        onAborted: options.onAborted,
       });
     },
     renderCall,
@@ -457,24 +475,28 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
   };
 }
 
-export interface ApprovedBashCallTracker {
+export interface BashEscalationCallTracker {
   markApproved(toolCallId: string): void;
+  markAborted(toolCallId: string): void;
   handleToolResult(event: ToolResultEvent): { details: SandboxBashDetails } | undefined;
 }
 
-export function createApprovedBashCallTracker(): ApprovedBashCallTracker {
-  const approvedToolCallIds = new Set<string>();
+export function createBashEscalationCallTracker(): BashEscalationCallTracker {
+  const statuses = new Map<string, "approved_once" | "aborted">();
   return {
     markApproved(toolCallId) {
-      approvedToolCallIds.add(toolCallId);
+      statuses.set(toolCallId, "approved_once");
+    },
+    markAborted(toolCallId) {
+      statuses.set(toolCallId, "aborted");
     },
     handleToolResult(event) {
-      if (!isBashToolResult(event) || !approvedToolCallIds.has(event.toolCallId)) {
-        return undefined;
-      }
-      approvedToolCallIds.delete(event.toolCallId);
+      if (!isBashToolResult(event)) return undefined;
+      const status = statuses.get(event.toolCallId);
+      if (status === undefined) return undefined;
+      statuses.delete(event.toolCallId);
       return {
-        details: withEscalationStatus(event.details, "approved_once"),
+        details: withEscalationStatus(event.details, status),
       };
     },
   };

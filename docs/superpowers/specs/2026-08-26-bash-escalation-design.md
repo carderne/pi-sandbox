@@ -125,6 +125,7 @@ The tool's details extend Pi's existing Bash details with rendering-only escalat
 type BashEscalationStatus =
   | "requested"
   | "approved_once"
+  | "aborted"
   | "denied"
   | "cancelled"
   | "timed_out"
@@ -144,7 +145,7 @@ The project should import TypeBox directly to define this schema and therefore a
 
 The registered tool continues to spread Pi's `createBashToolDefinition` result so its name, output accumulator, streaming updates, truncation behavior, and ordinary timeout behavior are retained. It overrides the parameter schema, prompt guidance, label, execution router, and call rendering, and narrowly wraps result rendering. The call renderer preserves Pi's command and timeout display while adding a durable escalation marker. The result wrapper updates the shared render state from escalation metadata and then delegates to Pi's existing Bash result renderer unchanged. The marker progresses from **outside pi-sandbox requested** to either **outside pi-sandbox — approved once** or **outside pi-sandbox — not run (`reason`)**. It must never label a denied or unavailable request as approved.
 
-The router and its wrapped update callback merge escalation metadata into Bash details without replacing truncation or full-output metadata. After **Allow once** and the final pre-spawn abort check, the router emits/records `approved_once` before delegating. Because Pi replaces a thrown tool error with a fresh result whose details are empty, the extension also tracks approved tool-call IDs until `tool_result` and merges `approved_once` into that final result. The marker therefore remains even if local process creation or execution later fails and after the session is restored. Default Bash calls have no escalation metadata and render exactly as they do today.
+The router and its wrapped update callback merge escalation metadata into Bash details without replacing truncation or full-output metadata. After **Allow once** and the final pre-spawn abort check, the router emits/records `approved_once` before delegating. Because Pi replaces a thrown tool error with a fresh result whose details are empty, the extension tracks approved and extension-aborted tool-call IDs until `tool_result` and merges the recorded terminal status into that final result. The marker therefore remains if local process creation or execution later fails, if the extension observes a pre-spawn abort, and after the session is restored. Pi does not invoke the result hook when it aborts before calling extension `execute()`, so the renderer narrowly recognizes that escalated error result by its exact `Operation aborted` text and renders `aborted` without altering the stored tool output. Default Bash calls have no escalation metadata and render exactly as they do today.
 
 The router has two explicit paths:
 
@@ -192,9 +193,9 @@ type EscalationDecision =
   | { action: "deny"; reason: "user" | "timeout" | "cancelled" | "unavailable" };
 ```
 
-Both the command and justification are untrusted model-generated text. The prompt uses a fixed header and fixed approval controls with a bounded, scrollable content viewport between them, so a very long command cannot push **Allow once** and **Deny** off-screen. The complete command remains inspectable; it is never silently truncated.
+Both the command and justification are untrusted model-generated text. The prompt uses a fixed header and fixed approval controls with a bounded, scrollable content viewport between them, so a very long command cannot push **Allow once** and **Deny** off-screen. Each approval choice is rendered on its own wrapped, non-truncated row so both choices and the active selection remain visible on narrow terminals. The complete command remains inspectable; it is never silently truncated.
 
-Display text is derived without changing the approved value. It visibly escapes C0/C1 controls, DEL, ANSI escape bytes, and Unicode format characters such as bidirectional overrides/isolates and zero-width controls. Newlines and tabs receive unambiguous visible representations. The UI wraps according to terminal display width, not JavaScript string length. The original command string—not the escaped display form—is retained in the queue entry and passed to execution after approval.
+Display text is derived without changing the approved value. It visibly escapes C0/C1 controls, DEL, ANSI escape bytes, and Unicode format characters such as bidirectional overrides/isolates and zero-width controls. Literal backslashes are escaped as `\\` so newlines, tabs, and other control representations cannot collide with literal escape-looking text. The UI wraps according to terminal display width, not JavaScript string length. The original command string—not the escaped display form—is retained in the queue entry and passed to execution after approval.
 
 The prompt reuses `permissionPromptTimeoutSeconds` and the existing `request-attention` event. Its default selection and all exceptional exits are **Deny**. Timers and abort listeners are cleared when the component resolves or is disposed.
 
@@ -203,7 +204,7 @@ The prompt reuses `permissionPromptTimeoutSeconds` and the existing `request-att
 Prompt dismissal and tool cancellation have different semantics:
 
 - Escape or Ctrl-C handled by the approval component is a user denial with reason `cancelled`. It returns the stable non-run result and does not abort the surrounding agent turn.
-- Once the extension's Bash `execute()` has begun, if the tool's `AbortSignal` is already aborted, aborts while queued, or aborts while the prompt is visible, the request closes/removes itself, invokes neither executor, and throws a Pi-compatible error whose message includes `aborted` and `escalated command was not run`. Pi may short-circuit an already-aborted batch after `tool_call` preflight and before invoking `execute()`; that earlier core-owned path returns Pi's generic `Operation aborted` result and still runs neither executor.
+- Once the extension's Bash `execute()` has begun, if the tool's `AbortSignal` is already aborted, aborts while queued, or aborts while the prompt is visible, the request closes/removes itself, invokes neither executor, records escalation status `aborted`, and throws a Pi-compatible error whose message includes `aborted` and `escalated command was not run`. Pi may short-circuit an already-aborted batch after `tool_call` preflight and before invoking `execute()`; that earlier core-owned path returns Pi's generic `Operation aborted` result, runs neither executor, and is rendered with the same `aborted` marker.
 - After **Allow once**, the router checks the signal once more immediately before delegating. An abort that wins this race prevents process creation and follows the same error path.
 - Once the local process has been spawned, Pi's local Bash implementation owns signal handling and preserves its existing process-tree cancellation behavior.
 
@@ -288,13 +289,13 @@ Use injected executor and prompt fakes for these tests; never run a genuinely un
 
 - The prompt renders the complete inspectable command, justification, and full-bypass warning while keeping its header and controls fixed.
 - Long commands use the scrollable viewport and cannot push approval controls off-screen.
-- ANSI, C0/C1, DEL, bidirectional, zero-width, and other Unicode format controls cannot alter or hide the approval UI.
-- Allow and deny keys resolve to the expected decision.
+- ANSI, C0/C1, DEL, bidirectional, zero-width, and other Unicode format controls cannot alter or hide the approval UI, and their visible representations cannot collide with literal escape-looking text.
+- Allow and deny remain complete and visibly selectable at narrow terminal widths, and their keys resolve to the expected decision.
 - Escape and Ctrl-C return prompt-level cancellation without aborting the agent turn.
 - Timeout, disposal, lost TUI, and tool-signal abort fail closed with their specified distinct semantics.
 - Timers/listeners are cleaned up after every resolution path.
 - The render wrappers retain Pi's command/timeout and Bash-result behavior, preserve truncation/full-output details when merging escalation metadata, and show the correct requested, approved-once, or not-run marker. Tests mirror Pi's call-then-result renderer order and inspect the already-created call component without requiring another render cycle.
-- Approved local failures receive `approved_once` details through the final `tool_result` hook so live and restored history retain the marker.
+- Approved local failures and extension-owned tool aborts receive their terminal details through the final `tool_result` hook so live and restored history retain the marker; Pi-owned pre-`execute()` aborts infer `aborted` during rendering because that hook is not invoked.
 - `require_escalated` calls remain visibly marked in live and restored session history without calling denied requests approved.
 
 ### Regression verification

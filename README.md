@@ -148,7 +148,9 @@ print modes are also unsupported. In all of those modes, the request returns
 unavailable and executes nothing.
 
 Call history records whether execution outside pi-sandbox was requested, approved
-once, or not run. This metadata is not mixed into the command's stdout or stderr.
+once, or not run. Tool-level cancellation is recorded as `not run (aborted)`,
+distinct from a user dismissing the approval prompt. This metadata is not mixed
+into the command's stdout or stderr.
 Simultaneous escalation prompts are displayed FIFO, one at a time, while ordinary
 Bash calls remain parallel. The permission timeout starts only when a queued prompt
 becomes visible.
@@ -157,8 +159,10 @@ Escape or Ctrl-C inside the approval prompt declines only that request and retur
 stable cancelled result. Cancelling the tool or turn closes a queued or visible
 request, runs nothing, and preserves Pi's abort semantics. An abort observed after
 the extension's `execute()` starts includes an explicit error saying that the
-escalated command was not run. If Pi aborts a batch before calling extension
-`execute()`, it may instead return its generic `Operation aborted` result.
+escalated command was not run and records an `aborted` marker. If Pi aborts a batch
+before calling extension `execute()`, it may instead return its generic
+`Operation aborted` result; escalation history renders that result with the same
+`aborted` marker.
 
 ## What it does
 

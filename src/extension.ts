@@ -12,11 +12,11 @@ import {
 import { Key } from "@earendil-works/pi-tui";
 
 import {
-  createApprovedBashCallTracker,
+  createBashEscalationCallTracker,
   createEscalatingBashToolDefinition,
   createEscalationPromptQueue,
   shouldPreflightBashDomains,
-  type ApprovedBashCallTracker,
+  type BashEscalationCallTracker,
   type BashExecutor,
   type SandboxBashInput,
 } from "./bash-permissions.ts";
@@ -69,7 +69,7 @@ export interface BashEscalationHookOptions {
     value: string,
     cwd: string,
   ) => Promise<void>;
-  approvedBashCalls: ApprovedBashCallTracker;
+  bashEscalationCalls: BashEscalationCallTracker;
 }
 
 export function registerBashEscalationHooks(
@@ -99,7 +99,7 @@ export function registerBashEscalationHooks(
     }
   });
 
-  pi.on("tool_result", (event) => options.approvedBashCalls.handleToolResult(event));
+  pi.on("tool_result", (event) => options.bashEscalationCalls.handleToolResult(event));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -115,7 +115,7 @@ export default function (pi: ExtensionAPI) {
   const escalationPromptQueue = createEscalationPromptQueue((request) =>
     showBashEscalationPrompt(pi, request),
   );
-  const approvedBashCalls = createApprovedBashCallTracker();
+  const bashEscalationCalls = createBashEscalationCallTracker();
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
@@ -310,7 +310,8 @@ export default function (pi: ExtensionAPI) {
       executeDefault: executeDefaultBash,
       promptQueue: escalationPromptQueue,
       getPromptTimeoutSeconds: (ctx) => loadConfig(ctx.cwd).permissionPromptTimeoutSeconds,
-      onApproved: approvedBashCalls.markApproved,
+      onApproved: bashEscalationCalls.markApproved,
+      onAborted: bashEscalationCalls.markAborted,
     }),
   );
 
@@ -322,7 +323,7 @@ export default function (pi: ExtensionAPI) {
     promptDomain: (ctx, domain, timeoutSeconds) =>
       promptDomainBlock(pi, ctx, domain, timeoutSeconds),
     applyDomainChoice: (choice, value, cwd) => applyChoice(choice, "domain", value, cwd),
-    approvedBashCalls,
+    bashEscalationCalls,
   });
 
   pi.on("user_bash", async (event, ctx) => {

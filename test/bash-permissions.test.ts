@@ -13,7 +13,7 @@ import { Check } from "typebox/value";
 
 import {
   BASH_ESCALATION_GUIDELINES,
-  createApprovedBashCallTracker,
+  createBashEscalationCallTracker,
   createEscalatingBashToolDefinition,
   createEscalationAbortError,
   createEscalationPromptQueue,
@@ -406,6 +406,7 @@ test("abort races before local delegation never execute the command", async () =
   alreadyAborted.abort();
   const rejectedByQueue = new AbortController();
   const approvedThenAborted = new AbortController();
+  const abortedIds: string[] = [];
   let executorCalls = 0;
   const executeLocal: BashExecutor = async () => {
     executorCalls++;
@@ -425,6 +426,7 @@ test("abort races before local delegation never execute the command", async () =
       ctx: tuiContext,
       queue: allowQueue,
       executeLocal,
+      onAborted: (toolCallId) => abortedIds.push(toolCallId),
     }),
     /aborted.*escalated command was not run/i,
   );
@@ -441,6 +443,7 @@ test("abort races before local delegation never execute the command", async () =
         },
       },
       executeLocal,
+      onAborted: (toolCallId) => abortedIds.push(toolCallId),
     }),
     /aborted.*escalated command was not run/i,
   );
@@ -457,10 +460,12 @@ test("abort races before local delegation never execute the command", async () =
         },
       },
       executeLocal,
+      onAborted: (toolCallId) => abortedIds.push(toolCallId),
     }),
     /aborted.*escalated command was not run/i,
   );
   assert.equal(executorCalls, 0);
+  assert.deepEqual(abortedIds, ["already-aborted", "queue-aborted", "approved-then-aborted"]);
 });
 
 test("prompt infrastructure failures fail closed while typed aborts propagate", async () => {
@@ -834,6 +839,67 @@ test("inactive Bash hides escalation requests while restored details remain dura
   assert.equal(restoredOutput.match(/outside pi-sandbox/g)?.length, 1);
 });
 
+test("Pi pre-execution aborts render as terminal not-run status without durable details", () => {
+  const render = (text: string, isError: boolean): string => {
+    const base = fakeBashDefinition(async () => textResult("local"));
+    base.renderCall = (args) => new MutableComponent(`call:${args.command}`);
+    base.renderResult = (result) =>
+      new MutableComponent(
+        `result:${result.content[0]?.type === "text" ? result.content[0].text : ""}`,
+      );
+    const tool = createEscalatingBashToolDefinition({
+      base,
+      label: "bash (sandboxed)",
+      isSandboxActive: () => false,
+      executeDefault: async () => textResult("sandbox"),
+      promptQueue: neverPromptQueue,
+      getPromptTimeoutSeconds: () => 600,
+    });
+    const args = {
+      command: "pwd",
+      sandbox_permissions: "require_escalated" as const,
+      justification: "Need local execution?",
+    };
+    const contextBase = {
+      args,
+      toolCallId: "core-aborted",
+      invalidate() {},
+      state: {},
+      cwd: process.cwd(),
+      executionStarted: false,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: false,
+      isError,
+    };
+    const callComponent = tool.renderCall!(
+      args,
+      renderTheme as never,
+      { ...contextBase, lastComponent: undefined } as never,
+    );
+    const resultComponent = tool.renderResult!(
+      {
+        content: [{ type: "text", text }],
+        details: {},
+      },
+      { expanded: false, isPartial: false },
+      renderTheme as never,
+      { ...contextBase, lastComponent: undefined } as never,
+    );
+    return [callComponent, resultComponent]
+      .flatMap((component) => component.render(100))
+      .join("\n");
+  };
+
+  const output = render("Operation aborted", true);
+
+  assert.match(output, /outside pi-sandbox — not run \(aborted\)/);
+  assert.doesNotMatch(output, /outside pi-sandbox requested/);
+  assert.doesNotMatch(render("Operation aborted", false), /outside pi-sandbox/);
+  assert.doesNotMatch(render("Error: Operation aborted", true), /outside pi-sandbox/);
+});
+
 test("default Bash rendering is unchanged and has no escalation marker", () => {
   const base = fakeBashDefinition(async () => textResult("unused"));
   base.renderCall = () => new MutableComponent("plain base call");
@@ -863,6 +929,7 @@ test("escalation markers use stable requested, approval, and not-run copy", () =
   for (const [status, suffix] of [
     ["denied", "denied"],
     ["cancelled", "cancelled"],
+    ["aborted", "aborted"],
     ["timed_out", "timed out"],
     ["unavailable", "unavailable"],
     ["invalid", "invalid"],
@@ -872,7 +939,7 @@ test("escalation markers use stable requested, approval, and not-run copy", () =
 });
 
 test("approved Bash failures retain their marker through Pi's final tool_result", () => {
-  const tracker = createApprovedBashCallTracker();
+  const tracker = createBashEscalationCallTracker();
   tracker.markApproved("spawn-error");
   const event = {
     type: "tool_result",
@@ -890,8 +957,30 @@ test("approved Bash failures retain their marker through Pi's final tool_result"
   assert.equal(tracker.handleToolResult(event), undefined);
 });
 
+test("Bash escalation tracker restores aborted metadata and consumes tracker state", () => {
+  const tracker = createBashEscalationCallTracker();
+  tracker.markAborted("aborted-call");
+  const event = {
+    type: "tool_result",
+    toolName: "bash",
+    toolCallId: "aborted-call",
+    input: { command: "pnpm install" },
+    content: [{ type: "text", text: "aborted: escalated command was not run" }],
+    details: { fullOutputPath: "/tmp/full-output" },
+    isError: true,
+  } satisfies ToolResultEvent;
+
+  assert.deepEqual(tracker.handleToolResult(event), {
+    details: {
+      fullOutputPath: "/tmp/full-output",
+      escalation: { status: "aborted" },
+    },
+  });
+  assert.equal(tracker.handleToolResult(event), undefined);
+});
+
 test("approved Bash tracker ignores unrelated results and preserves Bash details", () => {
-  const tracker = createApprovedBashCallTracker();
+  const tracker = createBashEscalationCallTracker();
   tracker.markApproved("approved");
   const unrelated = {
     type: "tool_result",

@@ -104,6 +104,21 @@ test("escapeTerminalPromptText exposes terminal and Unicode controls", () => {
   );
 });
 
+test("escapeTerminalPromptText distinguishes controls from literal escape-looking text", () => {
+  for (const [control, literal, escapedControl, escapedLiteral] of [
+    ["\n", "\\n", "\\n", "\\\\n"],
+    ["\t", "\\t", "\\t", "\\\\t"],
+    ["\x1b", "\\u{1b}", "\\u{1b}", "\\\\u{1b}"],
+  ] as const) {
+    const renderedControl = escapeTerminalPromptText(control);
+    const renderedLiteral = escapeTerminalPromptText(literal);
+
+    assert.equal(renderedControl, escapedControl);
+    assert.equal(renderedLiteral, escapedLiteral);
+    assert.notEqual(renderedControl, renderedLiteral);
+  }
+});
+
 test("Bash escalation is unavailable outside a local TUI without opening custom UI", async () => {
   for (const mode of ["rpc", "json", "print"] as const) {
     let customCalls = 0;
@@ -238,6 +253,24 @@ test("escalation prompt keeps fixed controls and scrolls through the complete sa
     harness.input(Key.escape);
   }
   assert.deepEqual(await pending, { action: "deny", reason: "cancelled" });
+});
+
+test("escalation prompt keeps both choices and the selected action visible at narrow widths", async () => {
+  const harness = createEscalationPromptHarness();
+  const pending = showBashEscalationPrompt(harness.pi, requestFor(harness.ctx));
+  await harness.ready;
+
+  const defaultSelection = harness.render(8).join("\n");
+  assert.match(defaultSelection, /→ Deny/);
+  assert.match(defaultSelection, /Allow\s+once/);
+
+  harness.input(Key.right);
+  const allowSelection = harness.render(8).join("\n");
+  assert.match(allowSelection, /Deny/);
+  assert.match(allowSelection, /→ Allow\s+once/);
+
+  harness.input(Key.enter);
+  assert.deepEqual(await pending, { action: "allow_once" });
 });
 
 test("escalation prompt defaults to deny and distinguishes user cancellation", async () => {
