@@ -243,12 +243,18 @@ test("escalation prompt keeps fixed controls and scrolls through the complete sa
     assert.match(first, /line-0/);
     assert.doesNotMatch(first, /line-119/);
 
-    for (let index = 0; index < 240; index++) harness.input(Key.down);
+    for (let index = 0; index < 240; index++) harness.input(Key.right);
     const last = harness.render(48).join("\n");
     assert.match(last, /line-119/);
     assert.doesNotMatch(last, /line-0-/);
     assert.match(last, /Allow once/);
     assert.match(last, /Deny/);
+
+    for (let index = 0; index < 240; index++) harness.input(Key.left);
+    const firstAgain = harness.render(48).join("\n");
+    assert.match(firstAgain, /line-0/);
+    assert.doesNotMatch(firstAgain, /line-119/);
+    assert.match(firstAgain, /↑↓ choose, enter confirm, ←→\/page up\/page\s+down\s+scroll/);
   } finally {
     harness.input(Key.escape);
   }
@@ -264,11 +270,17 @@ test("escalation prompt keeps both choices and the selected action visible at na
   assert.match(defaultSelection, /→ Deny/);
   assert.match(defaultSelection, /Allow\s+once/);
 
-  harness.input(Key.right);
+  harness.input(Key.down);
   const allowSelection = harness.render(8).join("\n");
   assert.match(allowSelection, /Deny/);
   assert.match(allowSelection, /→ Allow\s+once/);
 
+  harness.input(Key.up);
+  const denySelection = harness.render(8).join("\n");
+  assert.match(denySelection, /→ Deny/);
+  assert.match(denySelection, /Allow\s+once/);
+
+  harness.input(Key.down);
   harness.input(Key.enter);
   assert.deepEqual(await pending, { action: "allow_once" });
 });
@@ -293,7 +305,7 @@ test("escalation prompt allows once only after an explicit selection", async () 
   const harness = createEscalationPromptHarness();
   const pending = showBashEscalationPrompt(harness.pi, requestFor(harness.ctx));
   await harness.ready;
-  harness.input(Key.right);
+  harness.input(Key.down);
   harness.input(Key.enter);
   assert.deepEqual(await pending, { action: "allow_once" });
 });

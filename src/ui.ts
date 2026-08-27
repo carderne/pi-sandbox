@@ -200,7 +200,7 @@ export async function showBashEscalationPrompt(
             ...wrapTextWithAnsi(
               theme.fg(
                 "dim",
-                "←→ choose, enter confirm, ↑↓/page up/page down scroll, esc/ctrl+c cancel",
+                "↑↓ choose, enter confirm, ←→/page up/page down scroll, esc/ctrl+c cancel",
               ),
               safeWidth,
             ),
@@ -218,13 +218,13 @@ export async function showBashEscalationPrompt(
             );
             return;
           }
-          if (matchesKey(data, Key.left) || matchesKey(data, Key.right)) {
-            selectedIndex = matchesKey(data, Key.left) ? 0 : 1;
+          if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+            selectedIndex = matchesKey(data, Key.up) ? 0 : 1;
             tui.requestRender();
             return;
           }
-          if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
-            const delta = matchesKey(data, Key.up) ? -1 : 1;
+          if (matchesKey(data, Key.left) || matchesKey(data, Key.right)) {
+            const delta = matchesKey(data, Key.left) ? -1 : 1;
             scrollOffset = Math.max(0, Math.min(maxScrollOffset, scrollOffset + delta));
             tui.requestRender();
             return;
