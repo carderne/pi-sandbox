@@ -314,7 +314,7 @@ class EscalationRenderComponent extends Container {
   constructor(
     private baseComponent: Component,
     private readonly formatDim: (text: string) => string,
-    status: BashEscalationStatus,
+    status: BashEscalationStatus | undefined,
   ) {
     super();
     this.addChild(baseComponent);
@@ -334,8 +334,10 @@ class EscalationRenderComponent extends Container {
     this.addChild(this.markerComponent);
   }
 
-  updateMarker(status: BashEscalationStatus): void {
-    this.markerComponent.setText(`\n${this.formatDim(formatEscalationMarker(status))}`);
+  updateMarker(status: BashEscalationStatus | undefined): void {
+    this.markerComponent.setText(
+      status === undefined ? "" : `\n${this.formatDim(formatEscalationMarker(status))}`,
+    );
   }
 }
 
@@ -358,7 +360,7 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
 
   const wrapRenderedComponent = (
     baseComponent: Component,
-    status: BashEscalationStatus,
+    status: BashEscalationStatus | undefined,
     theme: BaseCallParameters[1],
     lastComponent: Component | undefined,
   ): EscalationRenderComponent => {
@@ -377,14 +379,15 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
         context: ExtendedRenderContext,
       ): Component => {
         const state = context.state as typeof context.state & EscalationRendererState;
-        const status = isEscalationRequest(args) ? "requested" : undefined;
+        const escalationRequested = isEscalationRequest(args);
+        const status = escalationRequested && options.isSandboxActive() ? "requested" : undefined;
         state.escalationStatus = status;
         const baseComponent = options.base.renderCall!(stripEscalationFields(args), theme, {
           ...context,
           args: stripEscalationFields(context.args),
           lastComponent: unwrapEscalationComponent(context.lastComponent),
         });
-        if (!status) {
+        if (!escalationRequested) {
           state.escalationCallComponent = undefined;
           return baseComponent;
         }
@@ -408,24 +411,14 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
       ): Component => {
         const state = context.state as typeof context.state & EscalationRendererState;
         const status = result.details?.escalation?.status ?? state.escalationStatus;
-        if (status) {
-          state.escalationStatus = status;
-          state.escalationCallComponent?.updateMarker(status);
-        }
+        state.escalationStatus = status;
+        state.escalationCallComponent?.updateMarker(status);
         const baseComponent = options.base.renderResult!(result, renderOptions, theme, {
           ...context,
           args: stripEscalationFields(context.args),
           lastComponent: unwrapEscalationComponent(context.lastComponent),
         });
-        if (!status) return baseComponent;
-        const component = wrapRenderedComponent(
-          baseComponent,
-          status,
-          theme,
-          context.lastComponent,
-        );
-        state.escalationCallComponent = component;
-        return component;
+        return baseComponent;
       }
     : undefined;
 

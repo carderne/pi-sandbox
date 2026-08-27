@@ -660,8 +660,10 @@ const renderTheme = {
 test("Bash renderer delegates stripped inputs, preserves details, and updates durable markers", () => {
   const callArgs: unknown[] = [];
   const callLastComponents: unknown[] = [];
+  const callBaseComponents: MutableComponent[] = [];
   const resultObjects: unknown[] = [];
   const resultLastComponents: unknown[] = [];
+  const resultBaseComponents: MutableComponent[] = [];
   const base = fakeBashDefinition(async () => textResult("unused"));
   base.renderCall = (args, _theme, context) => {
     callArgs.push(args);
@@ -671,6 +673,7 @@ test("Bash renderer delegates stripped inputs, preserves details, and updates du
         ? context.lastComponent
         : new MutableComponent("base call");
     component.text = `call:${args.command}:${args.timeout ?? "none"}`;
+    callBaseComponents.push(component);
     return component;
   };
   base.renderResult = (result, _options, _theme, context) => {
@@ -681,6 +684,7 @@ test("Bash renderer delegates stripped inputs, preserves details, and updates du
         ? context.lastComponent
         : new MutableComponent("base result");
     component.text = `result:${result.details?.fullOutputPath ?? "none"}`;
+    resultBaseComponents.push(component);
     return component;
   };
   const tool = createEscalatingBashToolDefinition({
@@ -691,17 +695,18 @@ test("Bash renderer delegates stripped inputs, preserves details, and updates du
     promptQueue: neverPromptQueue,
     getPromptTimeoutSeconds: () => 600,
   });
-  const context = {
-    args: {
-      command: "pnpm install",
-      timeout: 10,
-      sandbox_permissions: "require_escalated" as const,
-      justification: "Need registry?",
-    },
+  const args = {
+    command: "pnpm install",
+    timeout: 10,
+    sandbox_permissions: "require_escalated" as const,
+    justification: "Need registry?",
+  };
+  const state = {};
+  const contextBase = {
+    args,
     toolCallId: "rendered",
     invalidate() {},
-    lastComponent: undefined as Component | undefined,
-    state: {},
+    state,
     cwd: process.cwd(),
     executionStarted: true,
     argsComplete: true,
@@ -710,12 +715,19 @@ test("Bash renderer delegates stripped inputs, preserves details, and updates du
     showImages: false,
     isError: false,
   };
+  const callContext = {
+    ...contextBase,
+    lastComponent: undefined as Component | undefined,
+  };
+  const resultContext = {
+    ...contextBase,
+    lastComponent: undefined as Component | undefined,
+  };
 
-  const callComponent = tool.renderCall!(context.args, renderTheme as never, context as never);
+  const callComponent = tool.renderCall!(args, renderTheme as never, callContext as never);
   assert.deepEqual(callArgs, [{ command: "pnpm install", timeout: 10 }]);
   assert.match(callComponent.render(100).join("\n"), /outside pi-sandbox requested/);
 
-  context.lastComponent = callComponent;
   const result = {
     content: [{ type: "text" as const, text: "denied" }],
     details: {
@@ -727,14 +739,99 @@ test("Bash renderer delegates stripped inputs, preserves details, and updates du
     result,
     { expanded: false, isPartial: false },
     renderTheme as never,
-    context as never,
+    resultContext as never,
   );
   assert.equal(resultObjects[0], result);
   assert.equal(callLastComponents[0], undefined);
-  assert.ok(resultLastComponents[0] instanceof MutableComponent);
+  assert.equal(resultLastComponents[0], undefined);
   assert.match(resultComponent.render(100).join("\n"), /result:\/tmp\/full-output/);
   assert.match(callComponent.render(100).join("\n"), /outside pi-sandbox — not run \(denied\)/);
   assert.doesNotMatch(callComponent.render(100).join("\n"), /approved once/);
+  assert.equal(
+    [callComponent, resultComponent]
+      .flatMap((component) => component.render(100))
+      .join("\n")
+      .match(/outside pi-sandbox/g)?.length,
+    1,
+  );
+  assert.doesNotMatch(resultComponent.render(100).join("\n"), /outside pi-sandbox/);
+
+  callContext.lastComponent = callComponent;
+  tool.renderCall!(args, renderTheme as never, callContext as never);
+  assert.equal(callLastComponents[1], callBaseComponents[0]);
+
+  resultContext.lastComponent = resultComponent;
+  tool.renderResult!(
+    result,
+    { expanded: true, isPartial: false },
+    renderTheme as never,
+    resultContext as never,
+  );
+  assert.equal(resultLastComponents[1], resultBaseComponents[0]);
+});
+
+test("inactive Bash hides escalation requests while restored details remain durable", () => {
+  const base = fakeBashDefinition(async () => textResult("local"));
+  base.renderCall = (args) => new MutableComponent(`call:${args.command}`);
+  base.renderResult = (result) =>
+    new MutableComponent(
+      `result:${result.content[0]?.type === "text" ? result.content[0].text : ""}`,
+    );
+  const tool = createEscalatingBashToolDefinition({
+    base,
+    label: "bash (sandboxed)",
+    isSandboxActive: () => false,
+    executeDefault: async () => textResult("sandbox"),
+    promptQueue: neverPromptQueue,
+    getPromptTimeoutSeconds: () => 600,
+  });
+  const args = {
+    command: "pwd",
+    sandbox_permissions: "require_escalated" as const,
+    justification: "ignored while inactive",
+  };
+  const renderPair = (details: { escalation: { status: "approved_once" } } | undefined) => {
+    const state = {};
+    const contextBase = {
+      args: {
+        ...args,
+      },
+      toolCallId: "inactive-render",
+      invalidate() {},
+      state,
+      cwd: process.cwd(),
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: false,
+      isError: false,
+    };
+    const callComponent = tool.renderCall!(
+      args,
+      renderTheme as never,
+      { ...contextBase, lastComponent: undefined } as never,
+    );
+    const resultComponent = tool.renderResult!(
+      {
+        content: [{ type: "text", text: "local" }],
+        details,
+      },
+      { expanded: false, isPartial: false },
+      renderTheme as never,
+      { ...contextBase, lastComponent: undefined } as never,
+    );
+    return [callComponent, resultComponent]
+      .flatMap((component) => component.render(100))
+      .join("\n");
+  };
+
+  const inactiveOutput = renderPair(undefined);
+  assert.doesNotMatch(inactiveOutput, /outside pi-sandbox/);
+
+  const restoredOutput = renderPair({ escalation: { status: "approved_once" } });
+  assert.match(restoredOutput, /outside pi-sandbox — approved once/);
+  assert.equal(restoredOutput.match(/outside pi-sandbox/g)?.length, 1);
 });
 
 test("default Bash rendering is unchanged and has no escalation marker", () => {

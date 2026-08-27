@@ -1,5 +1,9 @@
 import { SandboxManager } from "@carderne/sandbox-runtime";
-import { type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  type AgentToolResult,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
   isToolCallEventType,
@@ -12,6 +16,7 @@ import {
   createEscalatingBashToolDefinition,
   createEscalationPromptQueue,
   shouldPreflightBashDomains,
+  type ApprovedBashCallTracker,
   type BashExecutor,
   type SandboxBashInput,
 } from "./bash-permissions.ts";
@@ -49,6 +54,53 @@ import {
   promptWriteBlock,
   warnIfAllDomainsAllowed,
 } from "./ui.ts";
+
+export interface BashEscalationHookOptions {
+  isSandboxActive: (ctx: ExtensionContext) => boolean;
+  effectiveDomains: (cwd: string) => string[];
+  getPromptTimeoutSeconds: (cwd: string) => number | undefined;
+  promptDomain: (
+    ctx: ExtensionContext,
+    domain: string,
+    timeoutSeconds: number | undefined,
+  ) => Promise<PermissionPromptResult>;
+  applyDomainChoice: (
+    choice: Exclude<PermissionPromptResult["action"], "abort">,
+    value: string,
+    cwd: string,
+  ) => Promise<void>;
+  approvedBashCalls: ApprovedBashCallTracker;
+}
+
+export function registerBashEscalationHooks(
+  pi: Pick<ExtensionAPI, "on">,
+  options: BashEscalationHookOptions,
+): void {
+  pi.on("tool_call", async (event, ctx) => {
+    if (!options.isSandboxActive(ctx) || !isToolCallEventType("bash", event)) return;
+
+    const input = event.input as SandboxBashInput;
+    if (!shouldPreflightBashDomains(input)) return;
+    for (const domain of extractDomainsFromCommand(input.command)) {
+      if (domainIsAllowed(domain, options.effectiveDomains(ctx.cwd))) continue;
+
+      const choice = await options.promptDomain(
+        ctx,
+        domain,
+        options.getPromptTimeoutSeconds(ctx.cwd),
+      );
+      if (choice.action === "abort") {
+        return {
+          block: true,
+          reason: `Network access to "${domain}" is blocked (not in allowedDomains).`,
+        };
+      }
+      await options.applyDomainChoice(choice.action, choice.value, ctx.cwd);
+    }
+  });
+
+  pi.on("tool_result", (event) => options.approvedBashCalls.handleToolResult(event));
+}
 
 export default function (pi: ExtensionAPI) {
   pi.registerFlag("no-sandbox", {
@@ -262,7 +314,16 @@ export default function (pi: ExtensionAPI) {
     }),
   );
 
-  pi.on("tool_result", (event) => approvedBashCalls.handleToolResult(event));
+  registerBashEscalationHooks(pi, {
+    isSandboxActive: (ctx) =>
+      sandboxEnabled && sandboxInitialized && loadConfig(ctx.cwd).enabled === true,
+    effectiveDomains,
+    getPromptTimeoutSeconds: (cwd) => loadConfig(cwd).permissionPromptTimeoutSeconds,
+    promptDomain: (ctx, domain, timeoutSeconds) =>
+      promptDomainBlock(pi, ctx, domain, timeoutSeconds),
+    applyDomainChoice: (choice, value, cwd) => applyChoice(choice, "domain", value, cwd),
+    approvedBashCalls,
+  });
 
   pi.on("user_bash", async (event, ctx) => {
     if (!sandboxEnabled || !sandboxInitialized) return;
@@ -302,28 +363,6 @@ export default function (pi: ExtensionAPI) {
     const config = loadConfig(ctx.cwd);
     if (!config.enabled) return;
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
-
-    if (sandboxInitialized && isToolCallEventType("bash", event)) {
-      const input = event.input as SandboxBashInput;
-      if (!shouldPreflightBashDomains(input)) return;
-      for (const domain of extractDomainsFromCommand(event.input.command)) {
-        if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
-          const choice = await promptDomainBlock(
-            pi,
-            ctx,
-            domain,
-            config.permissionPromptTimeoutSeconds,
-          );
-          if (choice.action === "abort") {
-            return {
-              block: true,
-              reason: `Network access to "${domain}" is blocked (not in allowedDomains).`,
-            };
-          }
-          await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
-        }
-      }
-    }
 
     if (isToolCallEventType("read", event)) {
       const path = canonicalizePath(event.input.path);
