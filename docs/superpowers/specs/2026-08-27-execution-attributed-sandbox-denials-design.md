@@ -134,7 +134,23 @@ After child `close`, or after process creation fails, the operations layer perfo
 
 A child `error` is retained but does not bypass the existing close/cleanup path. Preparation failure has no descriptor and therefore performs neither command cleanup nor attempt finish. If the abort signal is already set after preparation but before the synchronous spawn call, Pi does not spawn, performs existing cleanup, finishes the returned attempt, and reports an abort. This needs one direct check, not a new process state machine or active-work registry.
 
-The new attempt helper captures either the ordinary Pi Bash result or its thrown error together with the observation and denial summaries. It does not define a broad public outcome union, replace Pi's Bash tool, duplicate retained output, or aggregate unrelated lifecycle failures.
+The local `pi-sandbox` attempt-capture helper awaits both ordinary Pi Bash execution and the attributed `finished` promise. Its completed outcome is decision-complete and tagged, so it can preserve even an `undefined` throw:
+
+```ts
+export type CompletedAttributedBashAttempt<Result> =
+  | { ok: true; result: Result; finished: FinishedSandboxProcessAttempt }
+  | { ok: false; error: unknown; finished: FinishedSandboxProcessAttempt };
+```
+
+If Pi returned its normal successful `AgentToolResult` but the final observation is `termination: "signal"`, the helper extracts Pi's already-retained text content and turns that otherwise-successful result into a tool error with this exact shape:
+
+```text
+<retained Pi output>
+
+Command terminated by signal <SIGNAL>
+```
+
+This is a local adapter for Pi's installed `{ exitCode: null }` signal-result contract. Direct process signals are eligible command failures except observations already classified as timeout, abort, or spawn error. It does not add a streaming buffer, change `BashOperations` exit-code normalization, or require an upstream Pi release. Normal success stays successful; timeout, abort, spawn, preparation, and finalization failures retain their existing behavior. A signal that does not have structured evidence and does not match the fallback remains a tool error without guidance. Preparation and finalization rejections occur before a completed outcome exists and bypass recovery and guidance. The helper does not replace Pi's Bash tool, duplicate retained output, or aggregate unrelated lifecycle failures.
 
 Runtime preparation or finish failure is rethrown without denial guidance. It does not automatically run local Bash or mutate the extension's global sandbox lifecycle state as part of this feature.
 
@@ -153,7 +169,7 @@ If configuration publication fails, Pi does not run attempt B and reports the pu
 
 ## Denial decision
 
-Only an ordinary nonzero command failure from the final attributed attempt is eligible. Success, timeout, abort, spawn error, runtime preparation error, attempt-finalization error, policy-publication error, and a declined/cancelled write prompt receive no guidance.
+Only a final attributed command failure is eligible: an ordinary nonzero exit or a direct signal observation. Success, timeout, abort, spawn error, runtime preparation error, attempt-finalization error, policy-publication error, and a declined/cancelled write prompt receive no guidance.
 
 For an eligible failure:
 
@@ -202,7 +218,9 @@ The thrown error message is the untouched original message followed once by this
 This attempt appears to have failed because of a sandbox restriction. It was not retried outside the sandbox. If the command is necessary for the user's request, make a new Bash tool call with `sandbox_permissions: "require_escalated"` and a concise user-facing `justification`. Approval is still required.
 ```
 
-The result remains a tool error. Pi does not return an `AgentToolResult`, expose raw monitor data or credentials, claim certainty, suggest a broader command, or open an approval prompt. The current `Operation not permitted` conversion to a normal result is removed.
+Append suppression is deliberately narrow: suppress only when the original message already ends with the exact complete block above at the expected `\n\n` boundary. A stray `--- pi-sandbox guidance ---` elsewhere in the original text receives a complete trailing block. Reapplying the formatter is idempotent and the original message stays the exact prefix.
+
+The result remains a tool error. Pi does not return an `AgentToolResult` for a failure, expose raw monitor data or credentials, claim certainty, suggest a broader command, or open an approval prompt. The current `Operation not permitted` conversion to a normal result is removed.
 
 ## Compatibility boundaries
 
@@ -224,6 +242,7 @@ The result remains a tool error. Pi does not return an `AgentToolResult`, expose
 - Reject unrelated failures and a `SIGSYS` observation under `linux-bwrap`.
 - Prove structured evidence bypasses the fallback.
 - Preserve the original error prefix and append exactly one guidance block.
+- Do not suppress guidance merely because its header appears earlier in an error; suppress only an exact complete trailing block at the expected blank-line boundary.
 - Preserve tool-error rather than normal-result semantics.
 
 ### Attempt and recovery flow
@@ -236,9 +255,11 @@ The result remains a tool error. Pi does not return an `AgentToolResult`, expose
 - Add no guidance when B succeeds or when the user aborts the write prompt.
 - Allow a configured `denyWrite` final failure to use the ordinary cautious decision.
 - Finalize success, command failure, timeout, abort, and spawn-error attempts after existing cleanup.
+- Treat Pi's `{ exitCode: null }` result after a direct signal as a local tool error built from Pi's retained output and `Command terminated by signal <SIGNAL>`.
 - Treat preparation and finish failures as runtime errors without guidance or local fallback.
 - Handle an already-aborted signal after preparation without spawning.
 - Keep one unrelated active attempt attributable while another call publishes configuration and retries.
+- Hold unrelated attempt X open while A completes, configuration is published, and B completes; then finish or abort X and prove X, A, and B have only their own handle-scoped summaries and publication never calls `SandboxManager.reset()`.
 
 ### Integration and compatibility
 
@@ -246,6 +267,8 @@ The result remains a tool error. Pi does not return an `AgentToolResult`, expose
 - Spawn the exact attributed descriptor argv and environment with `shell: false`.
 - Preserve the descriptor's actual backend in the observation.
 - Preserve streaming callbacks and existing timeout/abort behavior.
+- Through `createBashToolDefinition`, prove that a signal-closing descriptor streams output and resolves Pi's installed `{ exitCode: null }` result, then the local adapter rejects with retained output, signal status, and exactly one guidance block for `linux-seccomp`/`SIGSYS`; prove a signal/backend case without evidence or fallback has no guidance.
+- Use a real descriptor that exits 23 to prove retained output, `{ termination: "exit", exitCode: 23 }`, cleanup before finish, attempt finalization, and Pi rejection containing `Command exited with code 23`.
 - Advance the network callback snapshot only after successful synchronous `updateConfig`.
 - Leave `user_bash`, SSH routing, unauthenticated-SOCKS configuration, and explicit escalation approval unchanged.
 - Show guidance only in TUI mode with UI while the sandbox is still active.
@@ -253,7 +276,7 @@ The result remains a tool error. Pi does not return an `AgentToolResult`, expose
 
 ## Release sequencing
 
-After the matching additive runtime API is published, update `@carderne/sandbox-runtime` and the pnpm lockfile. No runtime API removal or broad Pi migration is part of this feature.
+After the matching additive runtime API is published, install and pin its exact published version in both `package.json` and `pnpm-lock.yaml`; do not use `@latest` or invent an unpublished version number. No runtime API removal or broad Pi migration is part of this feature.
 
 ## Acceptance criteria
 
@@ -263,6 +286,7 @@ After the matching additive runtime API is published, update `@carderne/sandbox-
 - The fallback uses only the final attempt's actual backend, exit/signal observation, and original error message.
 - Permission recovery updates future macOS/Linux attempts without resetting runtime services or disrupting unrelated attribution.
 - Final actionable failures remain tool errors with their original message plus one bounded block.
+- Direct signal closures are correctly adapted from Pi's installed successful-null-exit result without changing Pi's process API.
 - Success, timeout, abort, spawn, runtime, publication, finalization, prompt-abort, and unrelated failures receive no guidance.
 - Existing explicit escalation approval, `user_bash`, SSH, cleanup, and session-lifecycle behavior remains intact.
 - No reviewer-model or automatic escalation behavior is introduced.
