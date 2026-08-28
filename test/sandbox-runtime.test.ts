@@ -2,7 +2,6 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock, type TestContext } from "node:test";
-import assert from "node:assert/strict";
 
 import {
   SandboxManager,
@@ -11,6 +10,7 @@ import {
   type SandboxAttemptHandle,
   type SandboxRuntimeConfig,
 } from "@carderne/sandbox-runtime";
+import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
@@ -503,7 +503,9 @@ test("timeout, post-spawn abort, and signal close retain distinct observations",
     assert.equal((await aborted.finished).observation.termination, "aborted");
 
     const signaled = createAttributedSandboxedBashOps();
-    await (await runAttributed(signaled)).execution;
+    await (
+      await runAttributed(signaled)
+    ).execution;
     assert.deepEqual((await signaled.finished).observation, {
       sandboxBackend: "linux-seccomp",
       exitCode: null,
@@ -557,14 +559,14 @@ test("preparation receives cwd and env while identical commands retain handle ev
     SandboxManager,
     "prepareSandboxAttempt",
     async (options: PrepareSandboxAttemptOptions) => {
-    prepared.push({ cwd: options.cwd, env: options.env });
-    next++;
-    return {
-      attempt: { attemptId: `attempt-${next}` } as never,
-      argv: ["/bin/echo", `stream-${next}`],
-      env: { PATH: process.env.PATH, ATTEMPT: String(next) },
-      sandboxBackend: next === 1 ? ("linux-bwrap" as const) : ("linux-seccomp" as const),
-    };
+      prepared.push({ cwd: options.cwd, env: options.env });
+      next++;
+      return {
+        attempt: { attemptId: `attempt-${next}` } as never,
+        argv: ["/bin/sh", "-c", `printf 'stream-${next}:%s' "$ATTEMPT"`],
+        env: { PATH: process.env.PATH, ATTEMPT: String(next) },
+        sandboxBackend: next === 1 ? ("linux-bwrap" as const) : ("linux-seccomp" as const),
+      };
     },
   );
   const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
@@ -572,10 +574,10 @@ test("preparation receives cwd and env while identical commands retain handle ev
     SandboxManager,
     "finishSandboxAttempt",
     async (handle: SandboxAttemptHandle) => ({
-    denials:
-      handle.attemptId === "attempt-2"
-        ? ([{ kind: "filesystem", source: "linux-seccomp" }] as const)
-        : [],
+      denials:
+        handle.attemptId === "attempt-2"
+          ? ([{ kind: "filesystem", source: "linux-seccomp" }] as const)
+          : [],
     }),
   );
   try {
@@ -584,14 +586,12 @@ test("preparation receives cwd and env while identical commands retain handle ev
     const aRun = await runAttributed(a);
     const bRun = await runAttributed(b);
     await Promise.all([aRun.execution, bRun.execution]);
-    assert.equal(Buffer.concat(aRun.chunks).toString().includes("stream-1"), true);
-    assert.equal(Buffer.concat(bRun.chunks).toString().includes("stream-2"), true);
+    assert.equal(Buffer.concat(aRun.chunks).toString(), "stream-1:1");
+    assert.equal(Buffer.concat(bRun.chunks).toString(), "stream-2:2");
     assert.equal(prepared[0]?.cwd, tmpdir());
     assert.deepEqual(prepared[0]?.env, { PATH: process.env.PATH });
     assert.deepEqual((await a.finished).denials, []);
-    assert.deepEqual((await b.finished).denials, [
-      { kind: "filesystem", source: "linux-seccomp" },
-    ]);
+    assert.deepEqual((await b.finished).denials, [{ kind: "filesystem", source: "linux-seccomp" }]);
     assert.equal((await a.finished).observation.sandboxBackend, "linux-bwrap");
     assert.equal((await b.finished).observation.sandboxBackend, "linux-seccomp");
   } finally {
@@ -667,12 +667,12 @@ test("configuration publication does not disturb an unrelated attributed attempt
     SandboxManager,
     "finishSandboxAttempt",
     async (handle: SandboxAttemptHandle) => ({
-    denials: [
-      {
-        kind: "network" as const,
-        source: handle.attemptId === "x" ? ("socks-proxy" as const) : ("http-proxy" as const),
-      },
-    ],
+      denials: [
+        {
+          kind: "network" as const,
+          source: handle.attemptId === "x" ? ("socks-proxy" as const) : ("http-proxy" as const),
+        },
+      ],
     }),
   );
   const update = mock.method(SandboxManager, "updateConfig", () => {});
@@ -683,24 +683,22 @@ test("configuration publication does not disturb an unrelated attributed attempt
     const xExecution = (await runAttributed(x, { signal: controller.signal })).execution;
 
     const a = createAttributedSandboxedBashOps();
-    await (await runAttributed(a)).execution;
+    await (
+      await runAttributed(a)
+    ).execution;
     updateSandboxConfig(DEFAULT_CONFIG);
 
     const b = createAttributedSandboxedBashOps();
-    await (await runAttributed(b)).execution;
+    await (
+      await runAttributed(b)
+    ).execution;
 
     controller.abort();
     await assert.rejects(xExecution, /aborted/);
 
-    assert.deepEqual((await x.finished).denials, [
-      { kind: "network", source: "socks-proxy" },
-    ]);
-    assert.deepEqual((await a.finished).denials, [
-      { kind: "network", source: "http-proxy" },
-    ]);
-    assert.deepEqual((await b.finished).denials, [
-      { kind: "network", source: "http-proxy" },
-    ]);
+    assert.deepEqual((await x.finished).denials, [{ kind: "network", source: "socks-proxy" }]);
+    assert.deepEqual((await a.finished).denials, [{ kind: "network", source: "http-proxy" }]);
+    assert.deepEqual((await b.finished).denials, [{ kind: "network", source: "http-proxy" }]);
     assert.equal(update.mock.callCount(), 1);
     assert.equal(reset.mock.callCount(), 0);
   } finally {

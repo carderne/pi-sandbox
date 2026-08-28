@@ -99,10 +99,7 @@ export async function initializeSandbox(
   await SandboxManager.initialize(runtimeConfig, networkAskCallback, true);
 }
 
-export function updateSandboxConfig(
-  config: SandboxConfig,
-  allowances?: SessionAllowances,
-): void {
+export function updateSandboxConfig(config: SandboxConfig, allowances?: SessionAllowances): void {
   const nextRuntimeConfig = buildRuntimeConfig(config, allowances);
   SandboxManager.updateConfig(nextRuntimeConfig);
   currentAllowedDomains = [...(nextRuntimeConfig.network?.allowedDomains ?? [])];

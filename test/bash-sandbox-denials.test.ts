@@ -1,7 +1,7 @@
+import { constants } from "node:os";
 import test from "node:test";
 
 import assert from "node:assert/strict";
-import { constants } from "node:os";
 
 import {
   PI_SANDBOX_GUIDANCE,
@@ -46,7 +46,10 @@ test("fallback rejects success, backend none, excluded exit codes, and unrelated
     false,
   );
   for (const exitCode of [2, 126, 127]) {
-    assert.equal(matchesSandboxDenialFallback(observation({ exitCode }), "ordinary failure"), false);
+    assert.equal(
+      matchesSandboxDenialFallback(observation({ exitCode }), "ordinary failure"),
+      false,
+    );
   }
   assert.equal(matchesSandboxDenialFallback(observation(), "ordinary failure"), false);
 });

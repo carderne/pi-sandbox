@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import test, { mock } from "node:test";
 
+import { SandboxManager } from "@carderne/sandbox-runtime";
 import {
-  type AgentToolResult,
   type BashOperations,
   type ExtensionAPI,
   type ExtensionContext,
@@ -10,9 +11,7 @@ import {
   type ToolResultEvent,
   createBashToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { SandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 
 import { createBashEscalationCallTracker } from "../src/bash-permissions.ts";
 import {
@@ -161,8 +160,7 @@ test("refreshSandbox propagates runtime configuration publication failures", () 
   });
   try {
     assert.throws(
-      () =>
-        refreshSandbox(DEFAULT_CONFIG, { domains: [], readPaths: [], writePaths: [] }, true),
+      () => refreshSandbox(DEFAULT_CONFIG, { domains: [], readPaths: [], writePaths: [] }, true),
       /publication failed/,
     );
   } finally {

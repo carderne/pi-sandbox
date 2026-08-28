@@ -77,7 +77,7 @@ rg -n "prepareSandboxAttempt|finishSandboxAttempt|SandboxBackend|SandboxDenialSu
 
 Expected during development: the manifest and lockfile resolve the immutable full commit, and the declaration search shows both manager methods plus the public types. If the Git package does not produce `dist`, add the narrow packaging fix to the runtime PR before editing Pi.
 
-Before the downstream Pi PR is made ready, replace this temporary dependency with the published release and run the exact-version verification below.
+Before the downstream Pi PR is made ready, replace this temporary dependency with the published release, remove the commit-specific `onlyBuiltDependencies` entry from `pnpm-workspace.yaml`, verify that no `digitalhurricane-io` dependency reference remains, and run the exact-version verification below.
 
 Run after the runtime release described in Global Constraints is published, substituting the exact published version that matches the required additive API:
 

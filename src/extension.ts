@@ -124,11 +124,7 @@ export function sandboxGuidanceAvailable(
   sandboxEnabled: boolean,
   sandboxInitialized: boolean,
 ): boolean {
-  return shouldShowSandboxGuidance(
-    ctx.mode,
-    ctx.hasUI,
-    sandboxEnabled && sandboxInitialized,
-  );
+  return shouldShowSandboxGuidance(ctx.mode, ctx.hasUI, sandboxEnabled && sandboxInitialized);
 }
 
 export function createSandboxBashOperationRoutes(
@@ -346,8 +342,7 @@ export default function (pi: ExtensionAPI) {
         });
         return "retry";
       },
-      guidanceAvailable: () =>
-        sandboxGuidanceAvailable(ctx, sandboxEnabled, sandboxInitialized),
+      guidanceAvailable: () => sandboxGuidanceAvailable(ctx, sandboxEnabled, sandboxInitialized),
     });
   };
 

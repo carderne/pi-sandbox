@@ -1,9 +1,6 @@
 import { constants } from "node:os";
 
-import {
-  type SandboxBackend,
-  type SandboxDenialSummary,
-} from "@carderne/sandbox-runtime";
+import { type SandboxBackend, type SandboxDenialSummary } from "@carderne/sandbox-runtime";
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export interface SandboxAttemptObservation {
@@ -46,17 +43,12 @@ export function matchesSandboxDenialFallback(
   if (!isEligibleCommandFailure(observation)) return false;
   const folded = originalErrorMessage.toLowerCase();
   if (DENIAL_KEYWORDS.some((keyword) => folded.includes(keyword))) return true;
-  if (
-    observation.exitCode === 2 ||
-    observation.exitCode === 126 ||
-    observation.exitCode === 127
-  ) {
+  if (observation.exitCode === 2 || observation.exitCode === 126 || observation.exitCode === 127) {
     return false;
   }
   return (
     observation.sandboxBackend === "linux-seccomp" &&
-    (observation.signal === "SIGSYS" ||
-      observation.exitCode === 128 + constants.signals.SIGSYS)
+    (observation.signal === "SIGSYS" || observation.exitCode === 128 + constants.signals.SIGSYS)
   );
 }
 
