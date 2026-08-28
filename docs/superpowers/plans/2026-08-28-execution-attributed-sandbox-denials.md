@@ -71,11 +71,12 @@
 Run after the runtime release described in Global Constraints is published, substituting the exact published version that matches the required additive API:
 
 ```bash
-pnpm add @carderne/sandbox-runtime@<published-matching-version>
+pnpm add --save-exact @carderne/sandbox-runtime@<published-matching-version>
+pnpm exec tsx -e 'import assert from "node:assert/strict"; import { readFileSync } from "node:fs"; const pkg = JSON.parse(readFileSync("package.json", "utf8")); const specifier = pkg.dependencies["@carderne/sandbox-runtime"]; const lock = readFileSync("pnpm-lock.yaml", "utf8"); const importer = lock.slice(lock.indexOf("importers:\n"), lock.indexOf("\npackages:\n")); const match = importer.match(/\x27@carderne\/sandbox-runtime\x27:\n\s+specifier:\s+([^\n]+)\n\s+version:\s+([^\n]+)/); assert.ok(match, "root importer runtime entry is required"); const [, lockSpecifier, lockVersion] = match; assert.match(specifier, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/); assert.equal(lockSpecifier, specifier); assert.equal(lockVersion, specifier); assert.doesNotMatch(`${specifier}\n${lockSpecifier}\n${lockVersion}`, /(?:\^|~|latest)/);'
 rg -n "prepareSandboxAttempt|finishSandboxAttempt|SandboxBackend|SandboxDenialSummary" node_modules/@carderne/sandbox-runtime/dist
 ```
 
-Expected: `package.json` and `pnpm-lock.yaml` pin the same exact published release, and the declaration search shows both manager methods plus the public types. If the matching release has not been published or any declaration is absent, stop before editing Pi because the runtime prerequisite is not satisfied.
+Expected: `package.json` and the root `pnpm-lock.yaml` importer have the same exact semver specifier and selected version, with no caret, tilde, or `latest`; the declaration search shows both manager methods plus the public types. If the matching release has not been published or any declaration is absent, stop before editing Pi because the runtime prerequisite is not satisfied.
 
 - [ ] **Step 2: Write failing classifier and formatting tests**
 
@@ -430,9 +431,9 @@ Also add a focused extension test proving that the refresh helper propagates an 
 
 - [ ] **Step 2: Run the focused tests to verify they fail**
 
-Run: `pnpm exec tsx --test test/sandbox-runtime.test.ts`
+Run: `pnpm exec tsx --test test/sandbox-runtime.test.ts test/extension.test.ts`
 
-Expected: FAIL because `updateSandboxConfig` is not exported and initialization does not pass `true`.
+Expected: FAIL because `updateSandboxConfig` is not exported, initialization does not pass `true`, and the extension still swallows the publication failure.
 
 - [ ] **Step 3: Implement the stable callback and synchronous publication**
 
@@ -1252,7 +1253,7 @@ git commit -m "feat: select final sandbox bash attempt"
 
 **Files:**
 
-- Modify: `src/extension.ts:38-43,129-158,232-303`
+- Modify: `src/extension.ts:38-43,232-345`
 - Modify: `test/extension.test.ts`
 
 **Interfaces:**
@@ -1264,26 +1265,13 @@ git commit -m "feat: select final sandbox bash attempt"
 
 - [ ] **Step 1: Write failing composition tests for live-state gating and caught-error recovery**
 
-Export a narrow pure composition seam from `src/extension.ts`:
+Add tests to `test/extension.test.ts` that import the intended, not-yet-implemented `sandboxGuidanceAvailable()` and `createSandboxBashOperationRoutes()` exports. Do not add either production export during this red step.
 
 ```ts
-export function sandboxGuidanceAvailable(
-  ctx: Pick<ExtensionContext, "mode" | "hasUI">,
-  sandboxEnabled: boolean,
-  sandboxInitialized: boolean,
-): boolean {
-  return shouldShowSandboxGuidance(
-    ctx.mode,
-    ctx.hasUI,
-    sandboxEnabled && sandboxInitialized,
-  );
-}
-```
-
-Add to `test/extension.test.ts`:
-
-```ts
-import { sandboxGuidanceAvailable } from "../src/extension.ts";
+import {
+  createSandboxBashOperationRoutes,
+  sandboxGuidanceAvailable,
+} from "../src/extension.ts";
 
 test("extension guidance gate checks current mode, UI, and both sandbox flags", () => {
   assert.equal(
@@ -1296,6 +1284,26 @@ test("extension guidance gate checks current mode, UI, and both sandbox flags", 
   assert.equal(sandboxGuidanceAvailable({ mode: "tui", hasUI: false }, true, true), false);
   assert.equal(sandboxGuidanceAvailable({ mode: "tui", hasUI: true }, false, true), false);
   assert.equal(sandboxGuidanceAvailable({ mode: "tui", hasUI: true }, true, false), false);
+});
+
+test("sandbox Bash operation routes keep model and user factories separate", () => {
+  const calls: string[] = [];
+  const routes = createSandboxBashOperationRoutes(
+    ((..._args: never[]) => {
+      calls.push("attributed");
+      return { operations: {} as never, finished: Promise.resolve({} as never) };
+    }) as never,
+    ((..._args: never[]) => {
+      calls.push("legacy");
+      return {} as never;
+    }) as never,
+  );
+
+  routes.model(undefined, true);
+  assert.deepEqual(calls, ["attributed"]);
+  calls.length = 0;
+  routes.user(undefined, true);
+  assert.deepEqual(calls, ["legacy"]);
 });
 ```
 
@@ -1320,9 +1328,7 @@ test("model Bash uses attributed operations while user_bash stays handleless", (
 });
 ```
 
-Keep the existing escalation hook tests unchanged.
-
-Add an executable routing seam alongside the narrow source-boundary assertion. Inject attributed and legacy operations factories into the seam, execute both its model-default and `user_bash` branches, and assert the model branch invokes only `createAttributedSandboxedBashOps` while the `user_bash` branch invokes only `createSandboxedBashOps`. Keep the source assertion only as supplemental coverage.
+Keep the existing escalation hook tests unchanged. The executable routing test is the behavioral assertion; keep the source-boundary assertion only as supplemental coverage.
 
 Add end-to-end composition tests through `createBashToolDefinition` using operations that stream text and resolve Pi's installed `{ exitCode: null }` signal result. For a `linux-seccomp`/`SIGSYS` completion, assert the final flow rejects with the exact retained Pi output prefix, `Command terminated by signal SIGSYS`, and exactly one guidance block. Add a negative signal/backend case (such as `linux-bwrap`/`SIGSYS` with no summaries and no fallback match) that remains a tool error without guidance. Add the real exit-23 descriptor case from Task 3 at this boundary and assert Pi rejects with retained output containing `Command exited with code 23` after cleanup and attempt finalization.
 
@@ -1330,15 +1336,45 @@ Add end-to-end composition tests through `createBashToolDefinition` using operat
 
 Run: `pnpm exec tsx --test test/extension.test.ts`
 
-Expected: FAIL because `sandboxGuidanceAvailable()` is not exported and model Bash is not wired to attributed operations.
+Expected: FAIL because `sandboxGuidanceAvailable()` and `createSandboxBashOperationRoutes()` are not exported and model Bash is not wired to attributed operations.
 
 - [ ] **Step 3: Replace the model Bash body with attributed attempt capture and signal-result adaptation**
+
+Implement the two seams exercised by Step 1 before wiring the model Bash body:
+
+```ts
+export function sandboxGuidanceAvailable(
+  ctx: Pick<ExtensionContext, "mode" | "hasUI">,
+  sandboxEnabled: boolean,
+  sandboxInitialized: boolean,
+): boolean {
+  return shouldShowSandboxGuidance(
+    ctx.mode,
+    ctx.hasUI,
+    sandboxEnabled && sandboxInitialized,
+  );
+}
+
+export function createSandboxBashOperationRoutes(
+  attributedFactory: typeof createAttributedSandboxedBashOps =
+    createAttributedSandboxedBashOps,
+  legacyFactory: typeof createSandboxedBashOps = createSandboxedBashOps,
+) {
+  return {
+    model: (shellPath?: string, sshProxy = true) =>
+      attributedFactory(shellPath, sshProxy),
+    user: (shellPath?: string, sshProxy = true) => legacyFactory(shellPath, sshProxy),
+  };
+}
+```
+
+Create one default `sandboxBashOperationRoutes` instance in the extension composition root. The model-attempt path below must call `sandboxBashOperationRoutes.model(...)`; the existing `user_bash` hook must call `sandboxBashOperationRoutes.user(...)`. This executable wiring, rather than the source-regex assertion, is the primary regression boundary.
 
 For an active sandbox, construct one new Pi Bash definition and one new attributed operations instance per call to `runAttempt()`. Catch only Pi's ordinary result/error around `execute`; then await the operations completion. Do not catch a rejected `finished` promise. Use the tagged completion contract, not optional `result`/`error` fields. If ordinary Pi execution returned a result but the completed observation is `termination: "signal"`, extract the already-retained text content and return an `ok: false` local adapter error whose message is exactly `<retained Pi output>\n\nCommand terminated by signal <SIGNAL>`. This adapter is local to pi-sandbox: it must not alter `BashOperations`, add a stream buffer, or require an upstream Pi release.
 
 ```ts
 const runAttempt = async () => {
-  const attributed = createAttributedSandboxedBashOps(
+  const attributed = sandboxBashOperationRoutes.model(
     userShellPath,
     loadConfig(ctx.cwd).network?.sshProxy !== false,
   );
@@ -1490,11 +1526,11 @@ Run:
 rg -n "reinitializeSandbox|Failed to reinitialize|OS-level sandbox restriction" src test README.md
 rg -n "SandboxManager\.reset|SandboxManager\.updateConfig|createAttributedSandboxedBashOps|createSandboxedBashOps" src/extension.ts src/sandbox-runtime.ts
 rg -n "result\?:|error\?:|sandbox attempt must complete with exactly one" src test
-rg -n "sandbox-runtime@.*latest" package.json pnpm-lock.yaml
+pnpm exec tsx -e 'import assert from "node:assert/strict"; import { readFileSync } from "node:fs"; const pkg = JSON.parse(readFileSync("package.json", "utf8")); const specifier = pkg.dependencies["@carderne/sandbox-runtime"]; const lock = readFileSync("pnpm-lock.yaml", "utf8"); const importer = lock.slice(lock.indexOf("importers:\n"), lock.indexOf("\npackages:\n")); const match = importer.match(/\x27@carderne\/sandbox-runtime\x27:\n\s+specifier:\s+([^\n]+)\n\s+version:\s+([^\n]+)/); assert.ok(match, "root importer runtime entry is required"); const [, lockSpecifier, lockVersion] = match; assert.match(specifier, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/); assert.equal(lockSpecifier, specifier); assert.equal(lockVersion, specifier); assert.doesNotMatch(`${specifier}\n${lockSpecifier}\n${lockVersion}`, /(?:\^|~|latest)/);'
 rg -n "endsWith\(.*PI_SANDBOX_GUIDANCE|stray guidance header|throw undefined|Command terminated by signal|exitCode: 23" src test
 ```
 
-Expected: the first command returns no matches. The second shows `reset()` only in disable/shutdown lifecycle paths, `updateConfig()` in permission publication, attributed operations for model default Bash, and legacy operations for `user_bash`. The tagged-union search finds no optional outcome contract or sentinel validation; the version search finds no `@latest`; the final search proves exact trailing-block idempotence, `throw undefined`, local signal adaptation, and real exit-23 coverage. Manually audit the concurrent X/A/B test for handle-scoped summaries and no reset, and the executable routing seam for model versus `user_bash` operations.
+Expected: the first command returns no matches. The second shows `reset()` only in disable/shutdown lifecycle paths, `updateConfig()` in permission publication, attributed operations for model default Bash, and legacy operations for `user_bash`. The tagged-union search finds no optional outcome contract or sentinel validation; the exact-version assertion proves the manifest and root lockfile importer use the same plain semver with no caret, tilde, or `latest`; the final search proves exact trailing-block idempotence, `throw undefined`, local signal adaptation, and real exit-23 coverage. Manually audit the concurrent X/A/B test for handle-scoped summaries and no reset, and the executable routing seam for model versus `user_bash` operations.
 
 - [ ] **Step 3: Run the complete repository verification**
 
