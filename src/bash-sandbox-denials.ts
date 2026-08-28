@@ -84,3 +84,41 @@ export function shouldShowSandboxGuidance(
 ): boolean {
   return mode === "tui" && hasUI && sandboxActive;
 }
+
+export type CompletedAttributedBashAttempt<Result> =
+  | { ok: true; result: Result; finished: FinishedSandboxProcessAttempt }
+  | { ok: false; error: unknown; finished: FinishedSandboxProcessAttempt };
+
+export type WriteRecoveryDisposition = "not-applicable" | "deny" | "abort" | "retry";
+
+export async function executeAttributedBashFlow<Result>(options: {
+  runAttempt: () => Promise<CompletedAttributedBashAttempt<Result>>;
+  recoverWrite: (error: unknown) => Promise<WriteRecoveryDisposition>;
+  guidanceAvailable: () => boolean;
+}): Promise<Result> {
+  const finish = (attempt: CompletedAttributedBashAttempt<Result>): Result => {
+    if (attempt.ok) return attempt.result;
+    if (
+      attempt.error instanceof Error &&
+      options.guidanceAvailable() &&
+      hasSandboxDenialEvidence(
+        attempt.finished.observation,
+        attempt.finished.denials,
+        attempt.error.message,
+      )
+    ) {
+      throw appendSandboxGuidance(attempt.error);
+    }
+    throw attempt.error;
+  };
+
+  const first = await options.runAttempt();
+  if (first.ok) return first.result;
+
+  const recovery = await options.recoverWrite(first.error);
+  if (recovery === "abort") throw first.error;
+  if (recovery !== "retry") return finish(first);
+
+  const second = await options.runAttempt();
+  return finish(second);
+}
