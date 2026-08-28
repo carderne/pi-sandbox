@@ -4,10 +4,15 @@ import { existsSync } from "node:fs";
 import {
   SandboxManager,
   type SandboxAskCallback,
+  type SandboxAttemptDescriptor,
   type SandboxRuntimeConfig,
 } from "@carderne/sandbox-runtime";
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 
+import {
+  type FinishedSandboxProcessAttempt,
+  type SandboxAttemptObservation,
+} from "./bash-sandbox-denials.ts";
 import { type SandboxConfig } from "./config.ts";
 import { canonicalizePath, domainIsAllowed } from "./policy.ts";
 
@@ -207,6 +212,22 @@ function waitForChildProcess(child: ChildProcess): Promise<number | null> {
   });
 }
 
+function createSshProxyCommand(sshProxy: boolean): string {
+  const socksProxyPort = sshProxy ? SandboxManager.getSocksProxyPort() : undefined;
+  return process.platform === "darwin" && socksProxyPort !== undefined
+    ? `ssh() { /usr/bin/ssh -o 'ProxyCommand=/usr/bin/nc -X 5 -x localhost:${socksProxyPort} %h %p' "$@"; }; `
+    : "";
+}
+
+function killProcessGroup(child: ReturnType<typeof spawn>): void {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
 export function createSandboxedBashOps(shellPath?: string, sshProxy = true): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
@@ -214,17 +235,8 @@ export function createSandboxedBashOps(shellPath?: string, sshProxy = true): Bas
 
       const { shell, args } = getShellConfig(shellPath);
 
-      // OpenSSH does not honor ALL_PROXY, unlike most of the tools that use
-      // the sandbox network proxy. Install a shell function so ordinary
-      // `ssh host` commands use the runtime's local SOCKS proxy too. This is
-      // deliberately opt-in at the config layer, but enabled by default.
-      const socksProxyPort = sshProxy ? SandboxManager.getSocksProxyPort() : undefined;
-      const sshProxyCommand =
-        process.platform === "darwin" && socksProxyPort !== undefined
-          ? `ssh() { /usr/bin/ssh -o 'ProxyCommand=/usr/bin/nc -X 5 -x localhost:${socksProxyPort} %h %p' "$@"; }; `
-          : "";
       const wrappedCommand = await SandboxManager.wrapWithSandbox(
-        `${sshProxyCommand}${command}`,
+        `${createSshProxyCommand(sshProxy)}${command}`,
         shell,
       );
 
@@ -238,25 +250,18 @@ export function createSandboxedBashOps(shellPath?: string, sshProxy = true): Bas
       let timedOut = false;
       let timeoutHandle: NodeJS.Timeout | undefined;
 
-      const killProcessGroup = () => {
-        if (!child.pid) return;
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          child.kill("SIGKILL");
-        }
-      };
+      const kill = () => killProcessGroup(child);
 
       if (timeout !== undefined && timeout > 0) {
         timeoutHandle = setTimeout(() => {
           timedOut = true;
-          killProcessGroup();
+          kill();
         }, timeout * 1000);
       }
 
       child.stdout?.on("data", onData);
       child.stderr?.on("data", onData);
-      signal?.addEventListener("abort", killProcessGroup, { once: true });
+      signal?.addEventListener("abort", kill, { once: true });
 
       try {
         const exitCode = await waitForChildProcess(child);
@@ -265,9 +270,146 @@ export function createSandboxedBashOps(shellPath?: string, sshProxy = true): Bas
         return { exitCode };
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
-        signal?.removeEventListener("abort", killProcessGroup);
+        signal?.removeEventListener("abort", kill);
         SandboxManager.cleanupAfterCommand();
       }
     },
   };
+}
+
+export interface AttributedSandboxedBashOps {
+  operations: BashOperations;
+  finished: Promise<FinishedSandboxProcessAttempt>;
+}
+
+export function createAttributedSandboxedBashOps(
+  shellPath?: string,
+  sshProxy = true,
+): AttributedSandboxedBashOps {
+  let resolveFinished!: (value: FinishedSandboxProcessAttempt) => void;
+  let rejectFinished!: (reason: unknown) => void;
+  const finished = new Promise<FinishedSandboxProcessAttempt>((resolve, reject) => {
+    resolveFinished = resolve;
+    rejectFinished = reject;
+  });
+  void finished.catch(() => {});
+
+  const operations: BashOperations = {
+    async exec(command, cwd, { onData, signal, timeout, env }) {
+      let descriptor: SandboxAttemptDescriptor;
+      try {
+        if (!existsSync(cwd)) {
+          throw new Error(`Working directory does not exist: ${cwd}`);
+        }
+        const { shell } = getShellConfig(shellPath);
+        descriptor = await SandboxManager.prepareSandboxAttempt({
+          command: `${createSshProxyCommand(sshProxy)}${command}`,
+          binShell: shell,
+          abortSignal: signal,
+          cwd,
+          env,
+        });
+      } catch (error) {
+        rejectFinished(error);
+        throw error;
+      }
+
+      const finalize = async (observation: SandboxAttemptObservation) => {
+        SandboxManager.cleanupAfterCommand();
+        try {
+          const result = await SandboxManager.finishSandboxAttempt(descriptor.attempt);
+          const value = { observation, denials: result.denials };
+          resolveFinished(value);
+          return value;
+        } catch (error) {
+          rejectFinished(error);
+          throw error;
+        }
+      };
+
+      if (signal?.aborted) {
+        await finalize({
+          sandboxBackend: descriptor.sandboxBackend,
+          exitCode: null,
+          signal: null,
+          termination: "aborted",
+        });
+        throw new Error("aborted");
+      }
+
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(descriptor.argv[0], descriptor.argv.slice(1), {
+          cwd,
+          env: descriptor.env,
+          shell: false,
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (error) {
+        await finalize({
+          sandboxBackend: descriptor.sandboxBackend,
+          exitCode: null,
+          signal: null,
+          termination: "spawn-error",
+        });
+        throw error;
+      }
+
+      let timedOut = false;
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      let closeSignal: NodeJS.Signals | null = null;
+      const kill = () => killProcessGroup(child);
+      const recordSignal = (_exitCode: number | null, signal: NodeJS.Signals | null) => {
+        closeSignal = signal;
+      };
+
+      if (timeout !== undefined && timeout > 0) {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          kill();
+        }, timeout * 1000);
+      }
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+      child.once("exit", recordSignal);
+      signal?.addEventListener("abort", kill, { once: true });
+
+      let exitCode: number | null = null;
+      let spawnError: unknown;
+      try {
+        exitCode = await waitForChildProcess(child);
+      } catch (error) {
+        spawnError = error;
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        child.removeListener("exit", recordSignal);
+        signal?.removeEventListener("abort", kill);
+      }
+
+      const commandAborted = signal?.aborted ?? false;
+      const commandTimedOut = timedOut;
+      const commandSignal = closeSignal;
+      const termination: SandboxAttemptObservation["termination"] = commandAborted
+        ? "aborted"
+        : commandTimedOut
+          ? "timeout"
+          : spawnError
+            ? "spawn-error"
+            : commandSignal
+              ? "signal"
+              : "exit";
+      await finalize({
+        sandboxBackend: descriptor.sandboxBackend,
+        exitCode,
+        signal: commandSignal,
+        termination,
+      });
+      if (commandAborted) throw new Error("aborted");
+      if (commandTimedOut) throw new Error(`timeout:${timeout}`);
+      if (spawnError) throw spawnError;
+      return { exitCode };
+    },
+  };
+  return { operations, finished };
 }

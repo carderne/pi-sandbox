@@ -6,7 +6,9 @@ import assert from "node:assert/strict";
 
 import {
   SandboxManager,
+  type PrepareSandboxAttemptOptions,
   type SandboxAskCallback,
+  type SandboxAttemptHandle,
   type SandboxRuntimeConfig,
 } from "@carderne/sandbox-runtime";
 
@@ -14,11 +16,13 @@ import { DEFAULT_CONFIG } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
+  createAttributedSandboxedBashOps,
   createSandboxedBashOps,
   extractBlockedWritePath,
   initializeSandbox,
   resolveAllowances,
   supportsNodeEnvProxy,
+  type AttributedSandboxedBashOps,
   updateSandboxConfig,
 } from "../src/sandbox-runtime.ts";
 
@@ -276,5 +280,434 @@ test("updateSandboxConfig advances the callback only after updateConfig succeeds
   } finally {
     update.mock.restore();
     initialize.mock.restore();
+  }
+});
+
+async function runAttributed(
+  attributed: AttributedSandboxedBashOps,
+  options: { signal?: AbortSignal; timeout?: number } = {},
+) {
+  const chunks: Buffer[] = [];
+  const execution = attributed.operations.exec("same command", tmpdir(), {
+    onData: (chunk) => chunks.push(chunk),
+    env: { PATH: process.env.PATH },
+    ...options,
+  });
+  return { execution, chunks };
+}
+
+test("attributed exec resolves when a daemonized grandchild holds the stdio pipes", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-attributed-exec-"));
+  const { command, pidPath } = backgroundNodeCommand(cwd, "setInterval(() => {}, 1000);");
+  const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => ({
+    attempt: { attemptId: "daemonized-grandchild" } as never,
+    argv: ["/bin/sh", "-c", command],
+    env: { PATH: process.env.PATH },
+    sandboxBackend: "linux-bwrap" as const,
+  }));
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => ({ denials: [] }));
+
+  const attributed = createAttributedSandboxedBashOps();
+  const execution = attributed.operations.exec("same command", cwd, { onData: () => {} });
+  t.after(async () => {
+    terminateRecordedProcess(pidPath);
+    await execution.catch(() => {});
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+    rmSync(cwd, { recursive: true, force: true });
+  });
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error("attributed exec did not resolve after child exit")), 1000);
+  });
+
+  assert.deepEqual(await Promise.race([execution, timeout]), { exitCode: 0 });
+  await attributed.finished;
+});
+
+test("command timeout excludes attributed attempt finalization time", async () => {
+  const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => ({
+    attempt: { attemptId: "slow-finish-timeout" } as never,
+    argv: ["/bin/sh", "-c", "exit 0"],
+    env: { PATH: process.env.PATH },
+    sandboxBackend: "linux-bwrap" as const,
+  }));
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return { denials: [] };
+  });
+  try {
+    const attributed = createAttributedSandboxedBashOps();
+    const { execution } = await runAttributed(attributed, { timeout: 0.1 });
+    assert.deepEqual(await execution, { exitCode: 0 });
+    assert.equal((await attributed.finished).observation.termination, "exit");
+  } finally {
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+  }
+});
+
+test("abort after child exit does not reclassify attributed finalization", async () => {
+  const controller = new AbortController();
+  const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => ({
+    attempt: { attemptId: "abort-during-finish" } as never,
+    argv: ["/bin/sh", "-c", "exit 0"],
+    env: { PATH: process.env.PATH },
+    sandboxBackend: "linux-bwrap" as const,
+  }));
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => {
+    controller.abort();
+    return { denials: [] };
+  });
+  try {
+    const attributed = createAttributedSandboxedBashOps();
+    const { execution } = await runAttributed(attributed, { signal: controller.signal });
+    assert.deepEqual(await execution, { exitCode: 0 });
+    assert.equal((await attributed.finished).observation.termination, "exit");
+  } finally {
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+  }
+});
+
+test("attributed operations spawn descriptor argv once and finalize after cleanup", async () => {
+  const calls: string[] = [];
+  const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => ({
+    attempt: { attemptId: "a" } as never,
+    argv: ["/bin/echo", "literal; exit 7"],
+    env: { PATH: process.env.PATH },
+    sandboxBackend: "linux-bwrap" as const,
+  }));
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {
+    calls.push("cleanup");
+  });
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => {
+    calls.push("finish");
+    return { denials: [{ kind: "network", source: "http-proxy" }] as const };
+  });
+  try {
+    const attributed = createAttributedSandboxedBashOps();
+    const { execution, chunks } = await runAttributed(attributed);
+    assert.deepEqual(await execution, { exitCode: 0 });
+    assert.match(Buffer.concat(chunks).toString(), /literal; exit 7/);
+    assert.deepEqual(await attributed.finished, {
+      observation: {
+        sandboxBackend: "linux-bwrap",
+        exitCode: 0,
+        signal: null,
+        termination: "exit",
+      },
+      denials: [{ kind: "network", source: "http-proxy" }],
+    });
+    assert.deepEqual(calls, ["cleanup", "finish"]);
+    assert.equal(prepare.mock.callCount(), 1);
+  } finally {
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+  }
+});
+
+test("spawn errors still cleanup and finish without becoming eligible", async () => {
+  const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => ({
+    attempt: { attemptId: "spawn-error" } as never,
+    argv: ["/definitely/missing/pi-sandbox-test"],
+    env: {},
+    sandboxBackend: "linux-seccomp" as const,
+  }));
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => ({ denials: [] }));
+  try {
+    const attributed = createAttributedSandboxedBashOps();
+    const { execution } = await runAttributed(attributed);
+    await assert.rejects(execution);
+    assert.equal((await attributed.finished).observation.termination, "spawn-error");
+    assert.equal(cleanup.mock.callCount(), 1);
+    assert.equal(finish.mock.callCount(), 1);
+  } finally {
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+  }
+});
+
+test("an already-aborted signal after preparation never spawns and is finalized", async () => {
+  const controller = new AbortController();
+  const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => {
+    controller.abort();
+    return {
+      attempt: { attemptId: "aborted" } as never,
+      argv: ["/bin/echo", "must-not-run"],
+      env: {},
+      sandboxBackend: "macos-seatbelt" as const,
+    };
+  });
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => ({ denials: [] }));
+  try {
+    const attributed = createAttributedSandboxedBashOps();
+    const { execution, chunks } = await runAttributed(attributed, { signal: controller.signal });
+    await assert.rejects(execution, /aborted/);
+    assert.deepEqual(chunks, []);
+    assert.equal((await attributed.finished).observation.termination, "aborted");
+  } finally {
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+  }
+});
+
+test("timeout, post-spawn abort, and signal close retain distinct observations", async () => {
+  const descriptors = [
+    {
+      attempt: { attemptId: "timeout" } as never,
+      argv: ["/bin/sh", "-c", "sleep 5"],
+      env: { PATH: process.env.PATH },
+      sandboxBackend: "linux-bwrap" as const,
+    },
+    {
+      attempt: { attemptId: "abort" } as never,
+      argv: ["/bin/sh", "-c", "sleep 5"],
+      env: { PATH: process.env.PATH },
+      sandboxBackend: "linux-bwrap" as const,
+    },
+    {
+      attempt: { attemptId: "signal" } as never,
+      argv: ["/bin/sh", "-c", "kill -SYS $$"],
+      env: { PATH: process.env.PATH },
+      sandboxBackend: "linux-seccomp" as const,
+    },
+  ];
+  const prepare = mock.method(
+    SandboxManager,
+    "prepareSandboxAttempt",
+    async () => descriptors.shift()!,
+  );
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => ({ denials: [] }));
+  try {
+    const timed = createAttributedSandboxedBashOps();
+    await assert.rejects((await runAttributed(timed, { timeout: 0.01 })).execution, /timeout/);
+    assert.equal((await timed.finished).observation.termination, "timeout");
+
+    const controller = new AbortController();
+    const aborted = createAttributedSandboxedBashOps();
+    const abortExecution = (await runAttributed(aborted, { signal: controller.signal })).execution;
+    setTimeout(() => controller.abort(), 10);
+    await assert.rejects(abortExecution, /aborted/);
+    assert.equal((await aborted.finished).observation.termination, "aborted");
+
+    const signaled = createAttributedSandboxedBashOps();
+    await (await runAttributed(signaled)).execution;
+    assert.deepEqual((await signaled.finished).observation, {
+      sandboxBackend: "linux-seccomp",
+      exitCode: null,
+      signal: "SIGSYS",
+      termination: "signal",
+    });
+  } finally {
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+  }
+});
+
+test("preparation and finish failures stay runtime errors", async () => {
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => {
+    throw new Error("finish failed");
+  });
+  const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => {
+    throw new Error("prepare failed");
+  });
+  try {
+    const preparation = createAttributedSandboxedBashOps();
+    await assert.rejects((await runAttributed(preparation)).execution, /prepare failed/);
+    await assert.rejects(preparation.finished, /prepare failed/);
+    assert.equal(cleanup.mock.callCount(), 0);
+    assert.equal(finish.mock.callCount(), 0);
+
+    prepare.mock.mockImplementationOnce(async () => ({
+      attempt: { attemptId: "finish" } as never,
+      argv: ["/usr/bin/true"],
+      env: { PATH: process.env.PATH },
+      sandboxBackend: "linux-bwrap" as const,
+    }));
+    const finalization = createAttributedSandboxedBashOps();
+    await assert.rejects((await runAttributed(finalization)).execution, /finish failed/);
+    await assert.rejects(finalization.finished, /finish failed/);
+    assert.equal(cleanup.mock.callCount(), 1);
+    assert.equal(finish.mock.callCount(), 1);
+  } finally {
+    prepare.mock.restore();
+    finish.mock.restore();
+    cleanup.mock.restore();
+  }
+});
+
+test("preparation receives cwd and env while identical commands retain handle evidence", async () => {
+  const prepared: Array<{ cwd?: string; env?: NodeJS.ProcessEnv }> = [];
+  let next = 0;
+  const prepare = mock.method(
+    SandboxManager,
+    "prepareSandboxAttempt",
+    async (options: PrepareSandboxAttemptOptions) => {
+    prepared.push({ cwd: options.cwd, env: options.env });
+    next++;
+    return {
+      attempt: { attemptId: `attempt-${next}` } as never,
+      argv: ["/bin/echo", `stream-${next}`],
+      env: { PATH: process.env.PATH, ATTEMPT: String(next) },
+      sandboxBackend: next === 1 ? ("linux-bwrap" as const) : ("linux-seccomp" as const),
+    };
+    },
+  );
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(
+    SandboxManager,
+    "finishSandboxAttempt",
+    async (handle: SandboxAttemptHandle) => ({
+    denials:
+      handle.attemptId === "attempt-2"
+        ? ([{ kind: "filesystem", source: "linux-seccomp" }] as const)
+        : [],
+    }),
+  );
+  try {
+    const a = createAttributedSandboxedBashOps();
+    const b = createAttributedSandboxedBashOps();
+    const aRun = await runAttributed(a);
+    const bRun = await runAttributed(b);
+    await Promise.all([aRun.execution, bRun.execution]);
+    assert.equal(Buffer.concat(aRun.chunks).toString().includes("stream-1"), true);
+    assert.equal(Buffer.concat(bRun.chunks).toString().includes("stream-2"), true);
+    assert.equal(prepared[0]?.cwd, tmpdir());
+    assert.deepEqual(prepared[0]?.env, { PATH: process.env.PATH });
+    assert.deepEqual((await a.finished).denials, []);
+    assert.deepEqual((await b.finished).denials, [
+      { kind: "filesystem", source: "linux-seccomp" },
+    ]);
+    assert.equal((await a.finished).observation.sandboxBackend, "linux-bwrap");
+    assert.equal((await b.finished).observation.sandboxBackend, "linux-seccomp");
+  } finally {
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+  }
+});
+
+test("a real nonzero descriptor retains output and finalizes after cleanup", async () => {
+  const calls: string[] = [];
+  const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => ({
+    attempt: { attemptId: "nonzero" } as never,
+    argv: ["/bin/sh", "-c", "printf 'nonzero retained output'; exit 23"],
+    env: { PATH: process.env.PATH },
+    sandboxBackend: "linux-bwrap" as const,
+  }));
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {
+    calls.push("cleanup");
+  });
+  const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => {
+    calls.push("finish");
+    return { denials: [] };
+  });
+  try {
+    const attributed = createAttributedSandboxedBashOps();
+    const { execution, chunks } = await runAttributed(attributed);
+    assert.deepEqual(await execution, { exitCode: 23 });
+    assert.equal(Buffer.concat(chunks).toString(), "nonzero retained output");
+    assert.deepEqual((await attributed.finished).observation, {
+      sandboxBackend: "linux-bwrap",
+      exitCode: 23,
+      signal: null,
+      termination: "exit",
+    });
+    assert.deepEqual(calls, ["cleanup", "finish"]);
+    assert.equal(finish.mock.callCount(), 1);
+  } finally {
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
+  }
+});
+
+test("configuration publication does not disturb an unrelated attributed attempt", async () => {
+  const descriptors = [
+    {
+      attempt: { attemptId: "x" } as never,
+      argv: ["/bin/sh", "-c", "sleep 5"],
+      env: { PATH: process.env.PATH },
+      sandboxBackend: "linux-bwrap" as const,
+    },
+    {
+      attempt: { attemptId: "a" } as never,
+      argv: ["/usr/bin/true"],
+      env: { PATH: process.env.PATH },
+      sandboxBackend: "linux-bwrap" as const,
+    },
+    {
+      attempt: { attemptId: "b" } as never,
+      argv: ["/usr/bin/true"],
+      env: { PATH: process.env.PATH },
+      sandboxBackend: "linux-seccomp" as const,
+    },
+  ];
+  const prepare = mock.method(
+    SandboxManager,
+    "prepareSandboxAttempt",
+    async () => descriptors.shift()!,
+  );
+  const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
+  const finish = mock.method(
+    SandboxManager,
+    "finishSandboxAttempt",
+    async (handle: SandboxAttemptHandle) => ({
+    denials: [
+      {
+        kind: "network" as const,
+        source: handle.attemptId === "x" ? ("socks-proxy" as const) : ("http-proxy" as const),
+      },
+    ],
+    }),
+  );
+  const update = mock.method(SandboxManager, "updateConfig", () => {});
+  const reset = mock.method(SandboxManager, "reset", async () => {});
+  try {
+    const controller = new AbortController();
+    const x = createAttributedSandboxedBashOps();
+    const xExecution = (await runAttributed(x, { signal: controller.signal })).execution;
+
+    const a = createAttributedSandboxedBashOps();
+    await (await runAttributed(a)).execution;
+    updateSandboxConfig(DEFAULT_CONFIG);
+
+    const b = createAttributedSandboxedBashOps();
+    await (await runAttributed(b)).execution;
+
+    controller.abort();
+    await assert.rejects(xExecution, /aborted/);
+
+    assert.deepEqual((await x.finished).denials, [
+      { kind: "network", source: "socks-proxy" },
+    ]);
+    assert.deepEqual((await a.finished).denials, [
+      { kind: "network", source: "http-proxy" },
+    ]);
+    assert.deepEqual((await b.finished).denials, [
+      { kind: "network", source: "http-proxy" },
+    ]);
+    assert.equal(update.mock.callCount(), 1);
+    assert.equal(reset.mock.callCount(), 0);
+  } finally {
+    reset.mock.restore();
+    update.mock.restore();
+    finish.mock.restore();
+    cleanup.mock.restore();
+    prepare.mock.restore();
   }
 });
