@@ -135,6 +135,15 @@ it does not normalize or edit the command, and no approval is remembered. A deni
 cancelled, timed-out, or unavailable request must not be repeated without new user
 direction.
 
+When a sandboxed model Bash command fails, pi-sandbox may append a bounded
+guidance block if the final process attempt has runtime denial evidence or
+matches a cautious compatibility heuristic. The failed call remains a tool
+error and is never retried outside pi-sandbox. In interactive TUI sessions,
+the model can make a separate `sandbox_permissions: "require_escalated"`
+request with a concise justification; the existing human approval prompt is
+still required. Headless modes and successful, timed-out, aborted, spawn, or
+unrelated failures receive no guidance.
+
 Allowing the call runs it outside pi-sandbox. The command and its subprocesses bypass
 all pi-sandbox enforcement for `filesystem.allowRead`, `filesystem.denyRead`,
 `filesystem.allowWrite`, `filesystem.denyWrite`, `network.allowedDomains`, and
