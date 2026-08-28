@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 
 import {
@@ -115,6 +115,98 @@ export function extractBlockedWritePath(output: string): string | null {
   return match ? match[1] : null;
 }
 
+const EXIT_STDIO_GRACE_MS = 100;
+
+/**
+ * Wait for a child process to exit without hanging on inherited stdio handles.
+ *
+ * After exit, keep reading while output is active. If a detached descendant
+ * holds the pipes open but leaves them idle, release them after a short grace.
+ */
+function waitForChildProcess(child: ChildProcess): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let exited = false;
+    let exitCode: number | null = null;
+    let postExitTimer: NodeJS.Timeout | undefined;
+    let stdoutEnded = child.stdout === null;
+    let stderrEnded = child.stderr === null;
+
+    const cleanup = () => {
+      if (postExitTimer) {
+        clearTimeout(postExitTimer);
+        postExitTimer = undefined;
+      }
+      child.removeListener("error", onError);
+      child.removeListener("exit", onExit);
+      child.removeListener("close", onClose);
+      child.stdout?.removeListener("end", onStdoutEnd);
+      child.stderr?.removeListener("end", onStderrEnd);
+      child.stdout?.removeListener("data", onData);
+      child.stderr?.removeListener("data", onData);
+    };
+
+    const finalize = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve(code);
+    };
+
+    const maybeFinalizeAfterExit = () => {
+      if (!exited || settled) return;
+      if (stdoutEnded && stderrEnded) finalize(exitCode);
+    };
+
+    const armIdleTimer = () => {
+      if (postExitTimer) clearTimeout(postExitTimer);
+      postExitTimer = setTimeout(() => finalize(exitCode), EXIT_STDIO_GRACE_MS);
+    };
+
+    const onData = () => {
+      if (exited && !settled) armIdleTimer();
+    };
+
+    const onStdoutEnd = () => {
+      stdoutEnded = true;
+      maybeFinalizeAfterExit();
+    };
+
+    const onStderrEnd = () => {
+      stderrEnded = true;
+      maybeFinalizeAfterExit();
+    };
+
+    const onError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const onExit = (code: number | null) => {
+      exited = true;
+      exitCode = code;
+      maybeFinalizeAfterExit();
+      if (!settled) armIdleTimer();
+    };
+
+    const onClose = (code: number | null) => {
+      finalize(code);
+    };
+
+    child.stdout?.once("end", onStdoutEnd);
+    child.stderr?.once("end", onStderrEnd);
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    child.once("close", onClose);
+  });
+}
+
 export function createSandboxedBashOps(shellPath?: string, sshProxy = true): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
@@ -136,51 +228,46 @@ export function createSandboxedBashOps(shellPath?: string, sshProxy = true): Bas
         shell,
       );
 
-      return new Promise((resolve, reject) => {
-        const child = spawn(shell, [...args, wrappedCommand], {
-          cwd,
-          env,
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-
-        let timedOut = false;
-        let timeoutHandle: NodeJS.Timeout | undefined;
-
-        const killProcessGroup = () => {
-          if (!child.pid) return;
-          try {
-            process.kill(-child.pid, "SIGKILL");
-          } catch {
-            child.kill("SIGKILL");
-          }
-        };
-
-        if (timeout !== undefined && timeout > 0) {
-          timeoutHandle = setTimeout(() => {
-            timedOut = true;
-            killProcessGroup();
-          }, timeout * 1000);
-        }
-
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
-        child.on("error", (error) => {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
-          reject(error);
-        });
-
-        signal?.addEventListener("abort", killProcessGroup, { once: true });
-        child.on("close", (code) => {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
-          signal?.removeEventListener("abort", killProcessGroup);
-          SandboxManager.cleanupAfterCommand();
-
-          if (signal?.aborted) reject(new Error("aborted"));
-          else if (timedOut) reject(new Error(`timeout:${timeout}`));
-          else resolve({ exitCode: code });
-        });
+      const child = spawn(shell, [...args, wrappedCommand], {
+        cwd,
+        env,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
       });
+
+      let timedOut = false;
+      let timeoutHandle: NodeJS.Timeout | undefined;
+
+      const killProcessGroup = () => {
+        if (!child.pid) return;
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      };
+
+      if (timeout !== undefined && timeout > 0) {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          killProcessGroup();
+        }, timeout * 1000);
+      }
+
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+      signal?.addEventListener("abort", killProcessGroup, { once: true });
+
+      try {
+        const exitCode = await waitForChildProcess(child);
+        if (signal?.aborted) throw new Error("aborted");
+        if (timedOut) throw new Error(`timeout:${timeout}`);
+        return { exitCode };
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        signal?.removeEventListener("abort", killProcessGroup);
+        SandboxManager.cleanupAfterCommand();
+      }
     },
   };
 }
