@@ -13,8 +13,8 @@ importers:
   .:
     dependencies:
       '@carderne/sandbox-runtime':
-        specifier: ^0.0.70
-        version: 0.0.70
+        specifier: github:digitalhurricane-io/sandbox-runtime#65d7a9b674bc21b5fba8003c6c0254b4739cb0f5
+        version: https://codeload.github.com/digitalhurricane-io/sandbox-runtime/tar.gz/65d7a9b674bc21b5fba8003c6c0254b4739cb0f5
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -153,8 +153,9 @@ packages:
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
-  '@carderne/sandbox-runtime@0.0.70':
-    resolution: {integrity: sha512-b/O2EFJt2DjnEal0mF4hzCNOOtJV6lknJJL2tYMPpcbOCEiHRo5ycK1K0WX5x+aOq0GF32S/sM1r4JbG4yQL2w==}
+  '@carderne/sandbox-runtime@https://codeload.github.com/digitalhurricane-io/sandbox-runtime/tar.gz/65d7a9b674bc21b5fba8003c6c0254b4739cb0f5':
+    resolution: {gitHosted: true, integrity: sha512-/g+z5/A+ShRzetwicRCnrg3L36GLcfD9Uqtkd1RLQztteCYjisvKX/zX1lmk9aq6/TPKsM0PjuK3bLp87yW00g==, tarball: https://codeload.github.com/digitalhurricane-io/sandbox-runtime/tar.gz/65d7a9b674bc21b5fba8003c6c0254b4739cb0f5}
+    version: 0.0.70
     engines: {node: '>=20.11.0'}
     hasBin: true
 
@@ -1297,7 +1298,7 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@carderne/sandbox-runtime@0.0.70':
+  '@carderne/sandbox-runtime@https://codeload.github.com/digitalhurricane-io/sandbox-runtime/tar.gz/65d7a9b674bc21b5fba8003c6c0254b4739cb0f5':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       commander: 12.1.0

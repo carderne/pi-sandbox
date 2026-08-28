@@ -1,2 +1,4 @@
 minimumReleaseAgeExclude:
   - "@carderne/sandbox-runtime"
+onlyBuiltDependencies:
+  - "@carderne/sandbox-runtime@https://codeload.github.com/digitalhurricane-io/sandbox-runtime/tar.gz/65d7a9b674bc21b5fba8003c6c0254b4739cb0f5"

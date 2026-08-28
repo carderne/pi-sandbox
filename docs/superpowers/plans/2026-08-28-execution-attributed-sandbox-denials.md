@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Use pnpm and TypeScript.
-- The matching runtime plan in the `sandbox-runtime` repository, `docs/superpowers/plans/2026-08-28-execution-attributed-sandbox-denials.md`, must be implemented and published first. This plan consumes its additive `prepareSandboxAttempt`, `finishSandboxAttempt`, `SandboxBackend`, and `SandboxDenialSummary` API; it does not duplicate runtime monitor/proxy work. Install and pin that exact matching published runtime version in both `package.json` and `pnpm-lock.yaml`; never use `@latest` or invent an unpublished version.
+- The matching runtime plan in the `sandbox-runtime` repository, `docs/superpowers/plans/2026-08-28-execution-attributed-sandbox-denials.md`, must be implemented first. During development, pin the full immutable commit from `digitalhurricane-io/sandbox-runtime` that contains the additive `prepareSandboxAttempt`, `finishSandboxAttempt`, `SandboxBackend`, and `SandboxDenialSummary` API; never pin a moving branch or use a local link in committed files. The final `pi-sandbox` PR remains gated on the runtime PR being merged and published: replace the temporary Git commit dependency with that exact published version in both `package.json` and `pnpm-lock.yaml` before making the downstream PR ready. This plan does not duplicate runtime monitor/proxy work.
 - Prepare a new attributed descriptor for every spawned model Bash process, spawn it exactly once with `argv[0]`, `argv.slice(1)`, `shell: false`, the returned `env`, and the same `cwd`, then run existing cleanup before finishing the attempt.
 - Only the final process attempt contributes evidence. If write recovery runs, finish and drain attempt A before resolving the write, discard A's evidence, and classify only attempt B.
 - Structured evidence takes precedence over the Codex-compatible fallback. Never combine evidence across attempts or inspect command text, host platform, generated guidance, monitor health, or unrelated runtime state.
@@ -66,7 +66,18 @@
 - Produces: `SandboxAttemptObservation`, `FinishedSandboxProcessAttempt`, `PI_SANDBOX_GUIDANCE`, `isEligibleCommandFailure()`, `matchesSandboxDenialFallback()`, `hasSandboxDenialEvidence()`, `appendSandboxGuidance()`, and `shouldShowSandboxGuidance()`.
 - Produces for Task 4: `CompletedAttributedBashAttempt<Result>`, `WriteRecoveryDisposition`, and `executeAttributedBashFlow()`.
 
-- [ ] **Step 1: Install the published runtime release and verify the additive declarations**
+- [ ] **Step 1: Install the immutable runtime development commit and verify the additive declarations**
+
+Until the upstream runtime release exists, install the full commit from the contributor fork:
+
+```bash
+pnpm add '@carderne/sandbox-runtime@github:digitalhurricane-io/sandbox-runtime#65d7a9b674bc21b5fba8003c6c0254b4739cb0f5'
+rg -n "prepareSandboxAttempt|finishSandboxAttempt|SandboxBackend|SandboxDenialSummary" node_modules/@carderne/sandbox-runtime/dist
+```
+
+Expected during development: the manifest and lockfile resolve the immutable full commit, and the declaration search shows both manager methods plus the public types. If the Git package does not produce `dist`, add the narrow packaging fix to the runtime PR before editing Pi.
+
+Before the downstream Pi PR is made ready, replace this temporary dependency with the published release and run the exact-version verification below.
 
 Run after the runtime release described in Global Constraints is published, substituting the exact published version that matches the required additive API:
 

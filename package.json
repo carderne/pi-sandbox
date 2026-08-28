@@ -39,7 +39,7 @@
     "ci:test": "pnpm test"
   },
   "dependencies": {
-    "@carderne/sandbox-runtime": "^0.0.70",
+    "@carderne/sandbox-runtime": "github:digitalhurricane-io/sandbox-runtime#65d7a9b674bc21b5fba8003c6c0254b4739cb0f5",
     "typebox": "^1.1.38"
   },
   "peerDependencies": {
