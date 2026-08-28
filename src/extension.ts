@@ -21,6 +21,12 @@ import {
   type SandboxBashInput,
 } from "./bash-permissions.ts";
 import {
+  executeAttributedBashFlow,
+  shouldShowSandboxGuidance,
+  type CompletedAttributedBashAttempt,
+  type FinishedSandboxProcessAttempt,
+} from "./bash-sandbox-denials.ts";
+import {
   addDomainToConfig,
   addReadPathToConfig,
   addWritePathToConfig,
@@ -36,6 +42,7 @@ import {
   resolveWritePermission,
 } from "./policy.ts";
 import {
+  createAttributedSandboxedBashOps,
   createSandboxedBashOps,
   extractBlockedWritePath,
   initializeSandbox,
@@ -112,6 +119,62 @@ export function refreshSandbox(
   updateSandboxConfig(config, allowances);
 }
 
+export function sandboxGuidanceAvailable(
+  ctx: Pick<ExtensionContext, "mode" | "hasUI">,
+  sandboxEnabled: boolean,
+  sandboxInitialized: boolean,
+): boolean {
+  return shouldShowSandboxGuidance(
+    ctx.mode,
+    ctx.hasUI,
+    sandboxEnabled && sandboxInitialized,
+  );
+}
+
+export function createSandboxBashOperationRoutes(
+  attributedFactory: typeof createAttributedSandboxedBashOps = createAttributedSandboxedBashOps,
+  legacyFactory: typeof createSandboxedBashOps = createSandboxedBashOps,
+) {
+  return {
+    model: (shellPath?: string, sshProxy = true) => attributedFactory(shellPath, sshProxy),
+    user: (shellPath?: string, sshProxy = true) => legacyFactory(shellPath, sshProxy),
+  };
+}
+
+function retainedPiText(result: AgentToolResult<any>): string {
+  return result.content
+    .filter((content) => content.type === "text")
+    .map((content) => content.text)
+    .join("\n");
+}
+
+export async function captureAttributedBashAttempt<Result extends AgentToolResult<any>>(
+  execution: Promise<Result>,
+  finishedPromise: Promise<FinishedSandboxProcessAttempt>,
+): Promise<CompletedAttributedBashAttempt<Result>> {
+  let result!: Result;
+  let threw = false;
+  let caught: unknown;
+  try {
+    result = await execution;
+  } catch (error) {
+    threw = true;
+    caught = error;
+  }
+  const finished = await finishedPromise;
+  if (threw) return { ok: false, error: caught, finished };
+  if (finished.observation.termination === "signal") {
+    const retained = retainedPiText(result);
+    const signalName = finished.observation.signal ?? "unknown";
+    return {
+      ok: false,
+      error: new Error(`${retained}\n\nCommand terminated by signal ${signalName}`),
+      finished,
+    };
+  }
+  return { ok: true, result, finished };
+}
+
 export default function (pi: ExtensionAPI) {
   pi.registerFlag("no-sandbox", {
     description: "Disable OS-level sandboxing for bash commands",
@@ -126,6 +189,7 @@ export default function (pi: ExtensionAPI) {
     showBashEscalationPrompt(pi, request),
   );
   const bashEscalationCalls = createBashEscalationCallTracker();
+  const sandboxBashOperationRoutes = createSandboxBashOperationRoutes();
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
@@ -231,76 +295,60 @@ export default function (pi: ExtensionAPI) {
   }
 
   const executeDefaultBash: BashExecutor = async (id, params, signal, onUpdate, ctx) => {
-    const runBash = () => {
-      if (!sandboxEnabled || !sandboxInitialized) {
-        return localBash.execute(id, params, signal, onUpdate, ctx);
-      }
-      return createBashToolDefinition(localCwd, {
-        operations: createSandboxedBashOps(
-          userShellPath,
-          loadConfig(ctx.cwd).network?.sshProxy !== false,
-        ),
-        shellPath: userShellPath,
-      }).execute(id, params, signal, onUpdate, ctx);
-    };
-
-    let result: AgentToolResult<any>;
-    try {
-      result = await runBash();
-    } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes("Operation not permitted")) {
-        throw error;
-      }
-      result = {
-        content: [
-          {
-            type: "text",
-            text: `Error: Command failed with OS-level sandbox restriction: ${error.message}`,
-          },
-        ],
-        details: {},
-      };
+    if (!sandboxEnabled || !sandboxInitialized) {
+      return localBash.execute(id, params, signal, onUpdate, ctx);
     }
 
-    if (sandboxEnabled && sandboxInitialized && ctx?.hasUI) {
-      const output = result.content
-        .filter((content: any) => content.type === "text")
-        .map((content: any) => content.text)
-        .join("\n");
-      const blockedPath = extractBlockedWritePath(output);
+    const runAttempt = async () => {
+      const attributed = sandboxBashOperationRoutes.model(
+        userShellPath,
+        loadConfig(ctx.cwd).network?.sshProxy !== false,
+      );
+      const execution = createBashToolDefinition(localCwd, {
+        operations: attributed.operations,
+        shellPath: userShellPath,
+      }).execute(id, params, signal, onUpdate, ctx);
+      return captureAttributedBashAttempt(execution, attributed.finished);
+    };
 
-      if (blockedPath) {
+    return executeAttributedBashFlow({
+      runAttempt,
+      recoverWrite: async (error) => {
+        if (!(error instanceof Error) || !ctx.hasUI) return "not-applicable";
+        const blockedPath = extractBlockedWritePath(error.message);
+        if (!blockedPath) return "not-applicable";
+
         const path = canonicalizePath(blockedPath);
         const config = loadConfig(ctx.cwd);
         const writePermission = await resolveWritePermission({
           path,
           allowWrite: effectiveWritePaths(ctx.cwd),
           denyWrite: config.filesystem?.denyWrite ?? [],
-          prompt: (path) => promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
+          prompt: (candidate) =>
+            promptWriteBlock(pi, ctx, candidate, config.permissionPromptTimeoutSeconds),
           saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
         });
-        if (writePermission.action === "deny") {
-          return result;
-        }
+
+        if (writePermission.action === "abort") return "abort";
+        if (writePermission.action === "deny") return "deny";
         if (writePermission.action === "allow") {
           refreshSandbox(loadConfig(ctx.cwd), allowances, sandboxInitialized);
-          return runBash();
+          return "retry";
         }
-        if (writePermission.action === "granted") {
-          onUpdate?.({
-            content: [
-              {
-                type: "text",
-                text: `\n--- Write access granted for "${writePermission.value}", retrying ---\n`,
-              },
-            ],
-            details: {},
-          });
-          return runBash();
-        }
-      }
-    }
-    return result;
+        onUpdate?.({
+          content: [
+            {
+              type: "text",
+              text: `\n--- Write access granted for "${writePermission.value}", retrying ---\n`,
+            },
+          ],
+          details: {},
+        });
+        return "retry";
+      },
+      guidanceAvailable: () =>
+        sandboxGuidanceAvailable(ctx, sandboxEnabled, sandboxInitialized),
+    });
   };
 
   pi.registerTool(
@@ -353,7 +401,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     return {
-      operations: createSandboxedBashOps(
+      operations: sandboxBashOperationRoutes.user(
         userShellPath,
         loadConfig(ctx.cwd).network?.sshProxy !== false,
       ),
