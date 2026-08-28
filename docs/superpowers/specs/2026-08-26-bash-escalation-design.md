@@ -90,7 +90,8 @@ The overridden Bash definition adds `promptGuidelines` with these self-contained
 - When using Bash, use the default sandbox first unless the operation is inherently known to require execution outside pi-sandbox.
 - For Bash, use `require_escalated` only when the command is necessary and sandbox restrictions prevent it from succeeding.
 - For Bash escalation, include a concise, user-facing justification describing the capability being requested.
-- For Bash escalation, do not retry after a denial, cancellation, timeout, or unavailable result unless the user explicitly asks.
+- When a sandboxed Bash attempt fails because of a sandbox restriction and the command is still needed, make one new Bash call with `sandbox_permissions: "require_escalated"`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it.
+- For Bash escalation, if the user declines that escalation prompt, or the escalation request is cancelled, times out, or is unavailable, stop. Do not submit another escalation request unless the user later explicitly asks.
 - For Bash escalation, do not claim the command ran unless the tool returns its actual command output.
 
 These are behavioral instructions, not a brittle enforcement mechanism. The extension will not parse prior output or require proof of a preceding sandbox failure. A human approval gate is the final authority.

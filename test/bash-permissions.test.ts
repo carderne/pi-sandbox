@@ -581,6 +581,14 @@ test("expanded Bash tool preserves default routing and local behavior when sandb
   assert.notEqual(tool.executionMode, "sequential");
 });
 
+test("Bash prompt guidance distinguishes a sandbox failure from a declined escalation", () => {
+  const guidance = BASH_ESCALATION_GUIDELINES.join("\n");
+
+  assert.match(guidance, /Do not wait for the user to request escalation separately/);
+  assert.match(guidance, /if the user declines that escalation prompt/i);
+  assert.doesNotMatch(guidance, /do not retry after a denial/);
+});
+
 test("active default Bash uses the existing sandbox path without prompting", async () => {
   const calls: string[] = [];
   const tool = createToolHarness({

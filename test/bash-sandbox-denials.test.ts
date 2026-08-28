@@ -124,6 +124,18 @@ test("guidance preserves the exact error prefix and is appended exactly once", (
   assert.equal(once.message.endsWith(PI_SANDBOX_GUIDANCE), true);
 });
 
+test("sandbox-denial guidance requests one escalation without waiting for another user request", () => {
+  assert.match(
+    PI_SANDBOX_GUIDANCE,
+    /make one new Bash tool call with `sandbox_permissions: "require_escalated"`/,
+  );
+  assert.match(PI_SANDBOX_GUIDANCE, /Do not wait for the user to request escalation separately/);
+  assert.match(
+    PI_SANDBOX_GUIDANCE,
+    /If that escalation request is declined, cancelled, times out, or is unavailable, stop/,
+  );
+});
+
 test("a stray guidance header still receives a complete trailing block", () => {
   const original = new Error("earlier --- pi-sandbox guidance --- text");
   const guided = appendSandboxGuidance(original);

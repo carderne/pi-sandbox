@@ -215,7 +215,7 @@ The thrown error message is the untouched original message followed once by this
 
 ```text
 --- pi-sandbox guidance ---
-This attempt appears to have failed because of a sandbox restriction. It was not retried outside the sandbox. If the command is necessary for the user's request, make a new Bash tool call with `sandbox_permissions: "require_escalated"` and a concise user-facing `justification`. Approval is still required.
+This sandboxed attempt appears to have failed because of a sandbox restriction and was not run outside pi-sandbox. If the command is still needed to complete the user's current request, make one new Bash tool call with `sandbox_permissions: "require_escalated"` and a concise user-facing `justification`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it. If that escalation request is declined, cancelled, times out, or is unavailable, stop and do not request escalation again unless the user later explicitly asks.
 ```
 
 Append suppression is deliberately narrow: suppress only when the original message already ends with the exact complete block above at the expected `\n\n` boundary. A stray `--- pi-sandbox guidance ---` elsewhere in the original text receives a complete trailing block. Reapplying the formatter is idempotent and the original message stays the exact prefix.
