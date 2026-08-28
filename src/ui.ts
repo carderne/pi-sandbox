@@ -171,8 +171,8 @@ export async function showBashEscalationPrompt(
           maxScrollOffset = Math.max(0, bodyLines.length - MAX_ESCALATION_VIEWPORT_LINES);
           scrollOffset = Math.min(scrollOffset, maxScrollOffset);
 
-          const deny = `${selectedIndex === 0 ? "→" : " "} Deny`;
-          const allow = `${selectedIndex === 1 ? "→" : " "} Allow once`;
+          const allow = `${selectedIndex === 0 ? "→" : " "} Allow once`;
+          const deny = `${selectedIndex === 1 ? "→" : " "} Deny`;
           const lines = [
             ...wrapTextWithAnsi(theme.fg("warning", "Run outside pi-sandbox?"), safeWidth),
             ...wrapTextWithAnsi(
@@ -195,8 +195,8 @@ export async function showBashEscalationPrompt(
             );
           }
           lines.push(
-            ...wrapTextWithAnsi(deny, safeWidth),
             ...wrapTextWithAnsi(allow, safeWidth),
+            ...wrapTextWithAnsi(deny, safeWidth),
             ...wrapTextWithAnsi(
               theme.fg(
                 "dim",
@@ -214,7 +214,7 @@ export async function showBashEscalationPrompt(
           }
           if (matchesKey(data, Key.enter)) {
             finish(
-              selectedIndex === 0 ? { action: "deny", reason: "user" } : { action: "allow_once" },
+              selectedIndex === 0 ? { action: "allow_once" } : { action: "deny", reason: "user" },
             );
             return;
           }

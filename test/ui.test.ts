@@ -267,30 +267,31 @@ test("escalation prompt keeps both choices and the selected action visible at na
   await harness.ready;
 
   const defaultSelection = harness.render(8).join("\n");
-  assert.match(defaultSelection, /→ Deny/);
-  assert.match(defaultSelection, /Allow\s+once/);
+  assert.match(defaultSelection, /→ Allow\s+once/);
+  assert.match(defaultSelection, /Deny/);
+  assert.ok(defaultSelection.indexOf("Allow") < defaultSelection.indexOf("Deny"));
 
   harness.input(Key.down);
-  const allowSelection = harness.render(8).join("\n");
-  assert.match(allowSelection, /Deny/);
-  assert.match(allowSelection, /→ Allow\s+once/);
+  const denySelection = harness.render(8).join("\n");
+  assert.match(denySelection, /Allow\s+once/);
+  assert.match(denySelection, /→ Deny/);
 
   harness.input(Key.up);
-  const denySelection = harness.render(8).join("\n");
-  assert.match(denySelection, /→ Deny/);
-  assert.match(denySelection, /Allow\s+once/);
+  const allowSelection = harness.render(8).join("\n");
+  assert.match(allowSelection, /→ Allow\s+once/);
+  assert.match(allowSelection, /Deny/);
 
   harness.input(Key.down);
   harness.input(Key.enter);
-  assert.deepEqual(await pending, { action: "allow_once" });
+  assert.deepEqual(await pending, { action: "deny", reason: "user" });
 });
 
-test("escalation prompt defaults to deny and distinguishes user cancellation", async () => {
-  const denied = createEscalationPromptHarness();
-  const denyPending = showBashEscalationPrompt(denied.pi, requestFor(denied.ctx));
-  await denied.ready;
-  denied.input(Key.enter);
-  assert.deepEqual(await denyPending, { action: "deny", reason: "user" });
+test("escalation prompt defaults to allow once and distinguishes user cancellation", async () => {
+  const allowed = createEscalationPromptHarness();
+  const allowPending = showBashEscalationPrompt(allowed.pi, requestFor(allowed.ctx));
+  await allowed.ready;
+  allowed.input(Key.enter);
+  assert.deepEqual(await allowPending, { action: "allow_once" });
 
   for (const key of [Key.escape, Key.ctrl("c")]) {
     const cancelled = createEscalationPromptHarness();
@@ -301,13 +302,13 @@ test("escalation prompt defaults to deny and distinguishes user cancellation", a
   }
 });
 
-test("escalation prompt allows once only after an explicit selection", async () => {
+test("escalation prompt denies only after an explicit selection", async () => {
   const harness = createEscalationPromptHarness();
   const pending = showBashEscalationPrompt(harness.pi, requestFor(harness.ctx));
   await harness.ready;
   harness.input(Key.down);
   harness.input(Key.enter);
-  assert.deepEqual(await pending, { action: "allow_once" });
+  assert.deepEqual(await pending, { action: "deny", reason: "user" });
 });
 
 test("escalation prompt times out only after becoming visible and cleans up", async () => {

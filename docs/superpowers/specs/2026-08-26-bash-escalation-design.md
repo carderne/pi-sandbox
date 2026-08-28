@@ -198,7 +198,7 @@ Both the command and justification are untrusted model-generated text. The promp
 
 Display text is derived without changing the approved value. It visibly escapes C0/C1 controls, DEL, ANSI escape bytes, and Unicode format characters such as bidirectional overrides/isolates and zero-width controls. Literal backslashes are escaped as `\\` so newlines, tabs, and other control representations cannot collide with literal escape-looking text. The UI wraps according to terminal display width, not JavaScript string length. The original command string—not the escaped display form—is retained in the queue entry and passed to execution after approval.
 
-The prompt reuses `permissionPromptTimeoutSeconds` and the existing `request-attention` event. Its default selection and all exceptional exits are **Deny**. Timers and abort listeners are cleared when the component resolves or is disposed.
+The prompt reuses `permissionPromptTimeoutSeconds` and the existing `request-attention` event. Its default selection is **Allow once**, while all exceptional exits are **Deny**. Timers and abort listeners are cleared when the component resolves or is disposed.
 
 ### Cancellation contract
 
