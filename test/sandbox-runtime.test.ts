@@ -2,9 +2,13 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock, type TestContext } from "node:test";
-
-import { SandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
+
+import {
+  SandboxManager,
+  type SandboxAskCallback,
+  type SandboxRuntimeConfig,
+} from "@carderne/sandbox-runtime";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
@@ -12,8 +16,10 @@ import {
   buildRuntimeConfig,
   createSandboxedBashOps,
   extractBlockedWritePath,
+  initializeSandbox,
   resolveAllowances,
   supportsNodeEnvProxy,
+  updateSandboxConfig,
 } from "../src/sandbox-runtime.ts";
 
 function shellQuote(value: string): string {
@@ -204,4 +210,71 @@ test("exec rejects when an in-flight command is aborted", async (t) => {
     exec("sleep 5", cwd, { onData: () => {}, signal: controller.signal }),
     new Error("aborted"),
   );
+});
+
+test("initializeSandbox enables monitoring and installs the stable domain callback", async () => {
+  let callback: SandboxAskCallback | undefined;
+  const initialize = mock.method(
+    SandboxManager,
+    "initialize",
+    async (_config: SandboxRuntimeConfig, ask: SandboxAskCallback, monitor?: boolean) => {
+      callback = ask;
+      assert.equal(monitor, true);
+    },
+  );
+  try {
+    await initializeSandbox({
+      ...DEFAULT_CONFIG,
+      network: { ...DEFAULT_CONFIG.network!, allowedDomains: ["initial.example"] },
+    });
+    assert.ok(callback);
+    assert.equal(await callback({ host: "initial.example", port: 443 }), true);
+    assert.equal(await callback({ host: "future.example", port: 443 }), false);
+    assert.equal(initialize.mock.callCount(), 1);
+  } finally {
+    initialize.mock.restore();
+  }
+});
+
+test("updateSandboxConfig advances the callback only after updateConfig succeeds", async () => {
+  let callback: SandboxAskCallback | undefined;
+  const initialize = mock.method(
+    SandboxManager,
+    "initialize",
+    async (_config: SandboxRuntimeConfig, ask: SandboxAskCallback) => {
+      callback = ask;
+    },
+  );
+  const update = mock.method(SandboxManager, "updateConfig", () => {});
+  try {
+    await initializeSandbox({
+      ...DEFAULT_CONFIG,
+      network: { ...DEFAULT_CONFIG.network!, allowedDomains: ["old.example"] },
+    });
+    const stableCallback = callback;
+    updateSandboxConfig({
+      ...DEFAULT_CONFIG,
+      network: { ...DEFAULT_CONFIG.network!, allowedDomains: ["new.example"] },
+    });
+    assert.equal(callback, stableCallback);
+    assert.equal(await callback!({ host: "old.example", port: 443 }), false);
+    assert.equal(await callback!({ host: "new.example", port: 443 }), true);
+
+    update.mock.mockImplementationOnce(() => {
+      throw new Error("publication failed");
+    });
+    assert.throws(
+      () =>
+        updateSandboxConfig({
+          ...DEFAULT_CONFIG,
+          network: { ...DEFAULT_CONFIG.network!, allowedDomains: ["rejected.example"] },
+        }),
+      /publication failed/,
+    );
+    assert.equal(await callback!({ host: "new.example", port: 443 }), true);
+    assert.equal(await callback!({ host: "rejected.example", port: 443 }), false);
+  } finally {
+    update.mock.restore();
+    initialize.mock.restore();
+  }
 });

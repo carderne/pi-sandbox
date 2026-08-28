@@ -55,7 +55,7 @@ export function allowsAllDomains(allowedDomains: string[] | undefined): boolean 
   return allowedDomains?.includes("*") ?? false;
 }
 
-export function domainIsAllowed(domain: string, allowedDomains: string[]): boolean {
+export function domainIsAllowed(domain: string, allowedDomains: readonly string[]): boolean {
   return allowedDomains.some((pattern) => domainMatchesPattern(domain, pattern));
 }
 

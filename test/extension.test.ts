@@ -7,10 +7,13 @@ import {
   type ToolCallEventResult,
   type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
+import { SandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
+import { mock } from "node:test";
 
 import { createBashEscalationCallTracker } from "../src/bash-permissions.ts";
-import { registerBashEscalationHooks } from "../src/extension.ts";
+import { DEFAULT_CONFIG } from "../src/config.ts";
+import { refreshSandbox, registerBashEscalationHooks } from "../src/extension.ts";
 
 type ToolCallHandler = (
   event: ToolCallEvent,
@@ -136,5 +139,20 @@ test("registered Bash result hook restores terminal metadata and consumes tracke
       details: { escalation: { status } },
     });
     assert.equal(harness.toolResultHandler(event), undefined);
+  }
+});
+
+test("refreshSandbox propagates runtime configuration publication failures", () => {
+  const update = mock.method(SandboxManager, "updateConfig", () => {
+    throw new Error("publication failed");
+  });
+  try {
+    assert.throws(
+      () =>
+        refreshSandbox(DEFAULT_CONFIG, { domains: [], readPaths: [], writePaths: [] }, true),
+      /publication failed/,
+    );
+  } finally {
+    update.mock.restore();
   }
 });

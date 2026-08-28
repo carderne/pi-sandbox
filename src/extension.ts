@@ -26,6 +26,7 @@ import {
   addWritePathToConfig,
   getConfigPaths,
   loadConfig,
+  type SandboxConfig,
 } from "./config.ts";
 import {
   canonicalizePath,
@@ -38,10 +39,10 @@ import {
   createSandboxedBashOps,
   extractBlockedWritePath,
   initializeSandbox,
-  reinitializeSandbox,
   resolveAllowances,
   type SessionAllowances,
   supportsNodeEnvProxy,
+  updateSandboxConfig,
 } from "./sandbox-runtime.ts";
 import {
   formatSandboxConfiguration,
@@ -102,6 +103,15 @@ export function registerBashEscalationHooks(
   pi.on("tool_result", (event) => options.bashEscalationCalls.handleToolResult(event));
 }
 
+export function refreshSandbox(
+  config: SandboxConfig,
+  allowances: SessionAllowances,
+  sandboxInitialized: boolean,
+): void {
+  if (!sandboxInitialized) return;
+  updateSandboxConfig(config, allowances);
+}
+
 export default function (pi: ExtensionAPI) {
   pi.registerFlag("no-sandbox", {
     description: "Disable OS-level sandboxing for bash commands",
@@ -126,15 +136,6 @@ export default function (pi: ExtensionAPI) {
   const effectiveReadPaths = (cwd: string) => effectiveAllowances(cwd).readPaths;
   const effectiveWritePaths = (cwd: string) => effectiveAllowances(cwd).writePaths;
 
-  async function refreshSandbox(cwd: string): Promise<void> {
-    if (!sandboxInitialized) return;
-    try {
-      await reinitializeSandbox(loadConfig(cwd), allowances);
-    } catch (error) {
-      console.error(`Warning: Failed to reinitialize sandbox: ${error}`);
-    }
-  }
-
   async function applyChoice(
     choice: Exclude<PermissionPromptResult["action"], "abort">,
     kind: "domain" | "read" | "write",
@@ -154,7 +155,7 @@ export default function (pi: ExtensionAPI) {
       if (!allowances.writePaths.includes(value)) allowances.writePaths.push(value);
       if (choice !== "session") addWritePathToConfig(target, value);
     }
-    await refreshSandbox(cwd);
+    refreshSandbox(loadConfig(cwd), allowances, sandboxInitialized);
   }
 
   function updateStatus(
@@ -282,7 +283,7 @@ export default function (pi: ExtensionAPI) {
           return result;
         }
         if (writePermission.action === "allow") {
-          await refreshSandbox(ctx.cwd);
+          refreshSandbox(loadConfig(ctx.cwd), allowances, sandboxInitialized);
           return runBash();
         }
         if (writePermission.action === "granted") {

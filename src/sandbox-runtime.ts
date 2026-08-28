@@ -53,9 +53,10 @@ export function resolveAllowances(
   };
 }
 
-export function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCallback {
-  return async ({ host }) => domainIsAllowed(host, allowedDomains);
-}
+let currentAllowedDomains: readonly string[] = [];
+
+const networkAskCallback: SandboxAskCallback = async ({ host }) =>
+  domainIsAllowed(host, currentAllowedDomains);
 
 export function buildRuntimeConfig(
   config: SandboxConfig,
@@ -89,18 +90,17 @@ export async function initializeSandbox(
   allowances?: SessionAllowances,
 ): Promise<void> {
   const runtimeConfig = buildRuntimeConfig(config, allowances);
-  await SandboxManager.initialize(
-    runtimeConfig,
-    createNetworkAskCallback(runtimeConfig.network?.allowedDomains ?? []),
-  );
+  currentAllowedDomains = [...(runtimeConfig.network?.allowedDomains ?? [])];
+  await SandboxManager.initialize(runtimeConfig, networkAskCallback, true);
 }
 
-export async function reinitializeSandbox(
+export function updateSandboxConfig(
   config: SandboxConfig,
-  allowances: SessionAllowances,
-): Promise<void> {
-  await SandboxManager.reset();
-  await initializeSandbox(config, allowances);
+  allowances?: SessionAllowances,
+): void {
+  const nextRuntimeConfig = buildRuntimeConfig(config, allowances);
+  SandboxManager.updateConfig(nextRuntimeConfig);
+  currentAllowedDomains = [...(nextRuntimeConfig.network?.allowedDomains ?? [])];
 }
 
 export function supportsNodeEnvProxy(version: string): boolean {
