@@ -8,7 +8,7 @@ Issue: [carderne/pi-sandbox#50](https://github.com/carderne/pi-sandbox/issues/50
 
 ## Summary
 
-Extend the existing `bash` tool with a Codex-style, model-requested escalation path. Bash remains sandboxed by default. When a command cannot complete because of a sandbox restriction, the model may issue a new `bash` call with `sandbox_permissions: "require_escalated"` and a short justification. In a TUI session, pi-sandbox shows the user the justification, the exact command, and a warning that the command will bypass all pi-sandbox filesystem and network restrictions. The command runs through Pi's ordinary local Bash implementation only if the user approves that single invocation.
+Extend the existing `bash` tool with a model-requested escalation path. Bash remains sandboxed by default. When a command cannot complete because of a sandbox restriction, the model may issue a new `bash` call with an `escalation` object containing a short justification. In a TUI session, pi-sandbox shows the user the justification, the exact command, and a warning that the command will bypass all pi-sandbox filesystem and network restrictions. The command runs through Pi's ordinary local Bash implementation only if the user approves that single invocation.
 
 The extension does not infer that escalation is required and does not automatically rerun a failed command. While pi-sandbox is active, the model must explicitly request escalation and the user must explicitly approve it. Denial, timeout, cancellation, and non-TUI use all fail closed and return an unambiguous result. If the user has already disabled pi-sandbox, the existing local-execution behavior remains authoritative.
 
@@ -66,8 +66,9 @@ After a relevant failure, the model may call:
 ```json
 {
   "command": "pnpm install",
-  "sandbox_permissions": "require_escalated",
-  "justification": "Allow pnpm to reach the registry and update its cache outside this workspace?"
+  "escalation": {
+    "justification": "Allow pnpm to reach the registry and update its cache outside this workspace?"
+  }
 }
 ```
 
@@ -88,9 +89,9 @@ If pi-sandbox has already been explicitly disabled, Bash already uses Pi's local
 The overridden Bash definition adds `promptGuidelines` with these self-contained rules. Pi flattens active tools' guidelines into a shared list, so each rule names Bash explicitly:
 
 - When using Bash, use the default sandbox first unless the operation is inherently known to require execution outside pi-sandbox.
-- For Bash, use `require_escalated` only when the command is necessary and sandbox restrictions prevent it from succeeding.
-- For Bash escalation, include a concise, user-facing justification describing the capability being requested.
-- When a sandboxed Bash attempt fails because of a sandbox restriction and the command is still needed, make one new Bash call with `sandbox_permissions: "require_escalated"`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it.
+- For ordinary Bash calls, omit the `escalation` field.
+- Request Bash escalation only when the command is necessary and sandbox restrictions prevent it from succeeding. Use `escalation: { "justification": "<concise user-facing reason>" }`.
+- When a sandboxed Bash attempt fails because of a sandbox restriction and the command is still needed, make one new Bash call with `escalation: { "justification": "<concise user-facing reason>" }`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it.
 - For Bash escalation, if the user declines that escalation prompt, or the escalation request is cancelled, times out, or is unavailable, stop. Do not submit another escalation request unless the user later explicitly asks.
 - For Bash escalation, do not claim the command ran unless the tool returns its actual command output.
 
@@ -98,14 +99,15 @@ These are behavioral instructions, not a brittle enforcement mechanism. The exte
 
 ## Tool contract
 
-The existing Bash schema is replaced with a compatible superset:
+The existing Bash schema is replaced with a strict nested escalation contract:
 
 ```ts
 interface SandboxBashInput {
   command: string;
   timeout?: number;
-  sandbox_permissions?: "use_default" | "require_escalated";
-  justification?: string;
+  escalation?: {
+    justification: string;
+  };
 }
 ```
 
@@ -115,10 +117,10 @@ Parameter semantics:
 | --- | --- |
 | `command` | Unchanged: the exact shell command Pi will execute. |
 | `timeout` | Unchanged: optional execution timeout in seconds. Time spent waiting for approval does not consume this timeout. |
-| `sandbox_permissions` | Omitted or `use_default` uses the normal sandbox. `require_escalated` requests one unsandboxed execution. |
-| `justification` | Required at runtime for `require_escalated`; ignored for ordinary execution. It must contain non-whitespace text and be at most 500 Unicode code points. |
+| `escalation` | Omitted for normal sandboxed execution. When present, requests one unsandboxed execution and must contain only `justification`. |
+| `escalation.justification` | Required, non-blank user-facing reason for the request, at most 500 Unicode code points. |
 
-`sandbox_permissions` uses Codex's established name and values so models familiar with that protocol can transfer the behavior. `justification` remains optional in the JSON schema because conditional requirements are inconsistently handled across model providers; the runtime enforces its presence, non-whitespace content, and code-point length before showing a prompt or running anything.
+Both the outer Bash object and nested `escalation` object reject unknown properties. Grouping the intent and its required justification makes malformed or partial escalation requests invalid as one atomic unit. The runtime also validates the nested value before checking whether the sandbox is active, so invalid escalation intent never invokes either executor.
 
 The tool's details extend Pi's existing Bash details with rendering-only escalation metadata:
 
@@ -152,9 +154,9 @@ The router has two explicit paths:
 
 ```text
 bash tool call
-├── omitted / use_default
+├── escalation omitted
 │   └── current sandboxed Bash path
-└── require_escalated
+└── escalation present
     ├── validate justification and TUI availability
     ├── wait for the escalation-prompt queue
     ├── show one-time approval prompt
@@ -164,7 +166,7 @@ bash tool call
 
 For an approved call, the extension checks the abort signal again, then passes the original command, timeout, abort signal, and update callback to the already-created local Bash definition. It must not rebuild, normalize, prepend to, or otherwise mutate the approved command. Extra escalation fields are removed or ignored before delegation.
 
-The existing `tool_call` domain preflight must recognize `require_escalated` and skip its fine-grained domain prompt for that call. Otherwise users could receive both a domain approval and a full-bypass approval for the same invocation. The full-bypass prompt supersedes every pi-sandbox rule for that one command. Default Bash calls continue through domain preflight unchanged.
+The existing `tool_call` domain preflight must skip its fine-grained domain prompt for any call containing an own `escalation` property, including malformed values. Otherwise an invalid escalation request could trigger an unrelated domain approval before being rejected. A valid full-bypass prompt supersedes every pi-sandbox rule for that one command. Default Bash calls continue through domain preflight unchanged.
 
 The blocked-write output parser and automatic retry remain available only on the default path. An escalated call must never be fed back through sandbox failure recovery or executed a second time.
 
@@ -264,8 +266,8 @@ Unit and integration-style tests should prove the safety boundary, not merely th
 
 ### Tool contract
 
-- Omitted and `use_default` permissions validate and use the existing sandboxed path.
-- `require_escalated` validates as a schema value; unknown values are rejected.
+- An omitted `escalation` property validates and uses the existing sandboxed path.
+- A strict `escalation: { justification }` object validates; unknown, extra, null, array, blank, and overlong values are rejected.
 - Missing, whitespace-only, or over-500-code-point justification never opens a prompt and never invokes either executor.
 - Existing `command` and `timeout` calls remain backward-compatible.
 
@@ -297,7 +299,7 @@ Use injected executor and prompt fakes for these tests; never run a genuinely un
 - Timers/listeners are cleaned up after every resolution path.
 - The render wrappers retain Pi's command/timeout and Bash-result behavior, preserve truncation/full-output details when merging escalation metadata, and show the correct requested, approved-once, or not-run marker. Tests mirror Pi's call-then-result renderer order and inspect the already-created call component without requiring another render cycle.
 - Approved local failures and extension-owned tool aborts receive their terminal details through the final `tool_result` hook so live and restored history retain the marker; Pi-owned pre-`execute()` aborts infer `aborted` during rendering because that hook is not invoked.
-- `require_escalated` calls remain visibly marked in live and restored session history without calling denied requests approved.
+- Escalation calls remain visibly marked in live session history without calling denied requests approved. Restored-session compatibility with the unreleased legacy shape is not required.
 
 ### Regression verification
 

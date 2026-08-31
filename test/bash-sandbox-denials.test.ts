@@ -127,8 +127,9 @@ test("guidance preserves the exact error prefix and is appended exactly once", (
 test("sandbox-denial guidance requests one escalation without waiting for another user request", () => {
   assert.match(
     PI_SANDBOX_GUIDANCE,
-    /make one new Bash tool call with `sandbox_permissions: "require_escalated"`/,
+    /make one new Bash tool call with `escalation: \{ "justification": "<concise user-facing reason>" \}`/,
   );
+  assert.doesNotMatch(PI_SANDBOX_GUIDANCE, /sandbox_permissions|require_escalated/);
   assert.match(PI_SANDBOX_GUIDANCE, /Do not wait for the user to request escalation separately/);
   assert.match(
     PI_SANDBOX_GUIDANCE,

@@ -73,19 +73,22 @@ function createHookHarness() {
 
 const hookContext = { cwd: "/workspace" } as ExtensionContext;
 
-test("escalated Bash calls bypass domain preflight even without a justification", async () => {
+test("valid and malformed escalation intent bypass domain preflight", async () => {
   const harness = createHookHarness();
 
-  for (const justification of ["Need network access", undefined]) {
+  for (const [toolCallId, escalation] of [
+    ["valid", { justification: "Need network access" }],
+    ["missing-justification", {}],
+    ["null", null],
+  ] as const) {
     const result = await harness.toolCallHandler(
       {
         type: "tool_call",
         toolName: "bash",
-        toolCallId: `escalated-${justification ?? "missing"}`,
+        toolCallId: `escalated-${toolCallId}`,
         input: {
           command: "curl https://blocked.example.com/data",
-          sandbox_permissions: "require_escalated",
-          justification,
+          escalation,
         },
       } as ToolCallEvent,
       hookContext,
@@ -97,32 +100,24 @@ test("escalated Bash calls bypass domain preflight even without a justification"
   assert.deepEqual(harness.appliedDomains, []);
 });
 
-test("default Bash calls retain domain preflight for omitted and use_default permissions", async () => {
+test("default Bash calls retain domain preflight", async () => {
   const harness = createHookHarness();
 
-  for (const [toolCallId, sandbox_permissions] of [
-    ["default-omitted", undefined],
-    ["default-explicit", "use_default"],
-  ] as const) {
-    const result = await harness.toolCallHandler(
-      {
-        type: "tool_call",
-        toolName: "bash",
-        toolCallId,
-        input: {
-          command: "curl https://blocked.example.com/data",
-          sandbox_permissions,
-        },
-      } as ToolCallEvent,
-      hookContext,
-    );
-    assert.deepEqual(result, {
-      block: true,
-      reason: 'Network access to "blocked.example.com" is blocked (not in allowedDomains).',
-    });
-  }
+  const result = await harness.toolCallHandler(
+    {
+      type: "tool_call",
+      toolName: "bash",
+      toolCallId: "default",
+      input: { command: "curl https://blocked.example.com/data" },
+    } as ToolCallEvent,
+    hookContext,
+  );
+  assert.deepEqual(result, {
+    block: true,
+    reason: 'Network access to "blocked.example.com" is blocked (not in allowedDomains).',
+  });
 
-  assert.deepEqual(harness.promptedDomains, ["blocked.example.com:42", "blocked.example.com:42"]);
+  assert.deepEqual(harness.promptedDomains, ["blocked.example.com:42"]);
   assert.deepEqual(harness.appliedDomains, []);
 });
 

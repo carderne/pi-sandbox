@@ -26,7 +26,7 @@ const DENIAL_KEYWORDS = [
 ] as const;
 
 export const PI_SANDBOX_GUIDANCE = `--- pi-sandbox guidance ---
-This sandboxed attempt appears to have failed because of a sandbox restriction and was not run outside pi-sandbox. If the command is still needed to complete the user's current request, make one new Bash tool call with \`sandbox_permissions: "require_escalated"\` and a concise user-facing \`justification\`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it. If that escalation request is declined, cancelled, times out, or is unavailable, stop and do not request escalation again unless the user later explicitly asks.`;
+This sandboxed attempt appears to have failed because of a sandbox restriction and was not run outside pi-sandbox. If the command is still needed to complete the user's current request, make one new Bash tool call with \`escalation: { "justification": "<concise user-facing reason>" }\`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it. If that escalation request is declined, cancelled, times out, or is unavailable, stop and do not request escalation again unless the user later explicitly asks.`;
 
 export function isEligibleCommandFailure(observation: SandboxAttemptObservation): boolean {
   if (observation.termination === "exit") {

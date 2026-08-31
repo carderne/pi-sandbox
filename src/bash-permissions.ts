@@ -13,20 +13,31 @@ import { type Static, Type } from "typebox";
 
 export const MAX_JUSTIFICATION_CODE_POINTS = 500;
 
-export const sandboxBashSchema = Type.Object({
-  command: Type.String({ description: "Bash command to execute" }),
-  timeout: Type.Optional(
-    Type.Number({ description: "Timeout in seconds (optional, no default timeout)" }),
-  ),
-  sandbox_permissions: Type.Optional(
-    Type.Union([Type.Literal("use_default"), Type.Literal("require_escalated")], {
-      description: "Use pi-sandbox by default, or request one-time execution outside pi-sandbox",
+export const bashEscalationSchema = Type.Object(
+  {
+    justification: Type.String({
+      description: "Concise user-facing reason for Bash escalation",
+      minLength: 1,
+      maxLength: MAX_JUSTIFICATION_CODE_POINTS,
+      pattern: "\\S",
     }),
-  ),
-  justification: Type.Optional(
-    Type.String({ description: "Concise user-facing reason for Bash escalation" }),
-  ),
-});
+  },
+  {
+    additionalProperties: false,
+    description: "Request one-time Bash execution outside pi-sandbox",
+  },
+);
+
+export const sandboxBashSchema = Type.Object(
+  {
+    command: Type.String({ description: "Bash command to execute" }),
+    timeout: Type.Optional(
+      Type.Number({ description: "Timeout in seconds (optional, no default timeout)" }),
+    ),
+    escalation: Type.Optional(bashEscalationSchema),
+  },
+  { additionalProperties: false },
+);
 
 export type SandboxBashInput = Static<typeof sandboxBashSchema>;
 export type BashEscalationStatus =
@@ -56,13 +67,18 @@ export interface EscalationPromptRequest {
   ctx: ExtensionContext;
 }
 
+export type BashInputClassification =
+  | { kind: "default" }
+  | { kind: "escalation"; justification: string }
+  | { kind: "invalid"; message: string };
+
 export type EscalationPrompt = (request: EscalationPromptRequest) => Promise<EscalationDecision>;
 
 export const BASH_ESCALATION_GUIDELINES = [
   "When using Bash, use the default sandbox first unless the operation is inherently known to require execution outside pi-sandbox.",
-  "For Bash, use require_escalated only when the command is necessary and sandbox restrictions prevent it from succeeding.",
-  "For Bash escalation, include a concise, user-facing justification describing the capability being requested.",
-  'When a sandboxed Bash attempt fails because of a sandbox restriction and the command is still needed, make one new Bash call with sandbox_permissions: "require_escalated". Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it.',
+  "For ordinary Bash calls, omit the `escalation` field.",
+  'Request Bash escalation only when the command is necessary and sandbox restrictions prevent it from succeeding. Use `escalation: { "justification": "<concise user-facing reason>" }`.',
+  'When a sandboxed Bash attempt fails because of a sandbox restriction and the command is still needed, make one new Bash call with `escalation: { "justification": "<concise user-facing reason>" }`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it.',
   "For Bash escalation, if the user declines that escalation prompt, or the escalation request is cancelled, times out, or is unavailable, stop. Do not submit another escalation request unless the user later explicitly asks.",
   "For Bash escalation, do not claim the command ran unless the tool returns its actual command output.",
 ] as const;
@@ -82,8 +98,42 @@ export function validateEscalationJustification(value: unknown): JustificationVa
   return { ok: true, justification: value.trim() };
 }
 
-export function isEscalationRequest(input: Pick<SandboxBashInput, "sandbox_permissions">): boolean {
-  return input.sandbox_permissions === "require_escalated";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function hasEscalationProperty(input: unknown): boolean {
+  return isRecord(input) && Object.hasOwn(input, "escalation");
+}
+
+export function classifyBashInput(input: unknown): BashInputClassification {
+  if (!isRecord(input)) {
+    return { kind: "invalid", message: "Invalid Bash tool input." };
+  }
+
+  const allowedOuterKeys = new Set(["command", "timeout", "escalation"]);
+  if (Object.keys(input).some((key) => !allowedOuterKeys.has(key))) {
+    return { kind: "invalid", message: "Invalid Bash tool input." };
+  }
+
+  if (!hasEscalationProperty(input)) return { kind: "default" };
+  const escalation = input.escalation;
+  if (
+    !isRecord(escalation) ||
+    Object.keys(escalation).length !== 1 ||
+    !Object.hasOwn(escalation, "justification")
+  ) {
+    return { kind: "invalid", message: "Invalid Bash escalation request." };
+  }
+
+  const validation = validateEscalationJustification(escalation.justification);
+  return validation.ok
+    ? { kind: "escalation", justification: validation.justification }
+    : { kind: "invalid", message: validation.message };
+}
+
+export function isEscalationRequest(input: unknown): boolean {
+  return classifyBashInput(input).kind === "escalation";
 }
 
 export function stripEscalationFields(input: SandboxBashInput): BashToolInput {
@@ -238,9 +288,16 @@ export async function executeEscalatedBash(
     throw createEscalationAbortError();
   };
 
+  const classification = classifyBashInput(options.input);
+  if (classification.kind !== "escalation") {
+    return createNotRunResult(
+      "invalid",
+      classification.kind === "invalid"
+        ? classification.message
+        : "Invalid Bash escalation request.",
+    );
+  }
   if (options.signal?.aborted) throwAborted();
-  const validation = validateEscalationJustification(options.input.justification);
-  if (!validation.ok) return createNotRunResult("invalid", validation.message);
   if (options.ctx.mode !== "tui" || !options.ctx.hasUI) {
     return createNotRunResult("unavailable");
   }
@@ -250,7 +307,7 @@ export async function executeEscalatedBash(
     decision = await options.queue.enqueue({
       toolCallId: options.toolCallId,
       command: options.input.command,
-      justification: validation.justification,
+      justification: classification.justification,
       timeoutSeconds: options.promptTimeoutSeconds,
       signal: options.signal,
       ctx: options.ctx,
@@ -388,7 +445,7 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
         context: ExtendedRenderContext,
       ): Component => {
         const state = context.state as typeof context.state & EscalationRendererState;
-        const escalationRequested = isEscalationRequest(args);
+        const escalationRequested = hasEscalationProperty(args);
         const status = escalationRequested && options.isSandboxActive() ? "requested" : undefined;
         state.escalationStatus = status;
         const baseComponent = options.base.renderCall!(stripEscalationFields(args), theme, {
@@ -420,7 +477,7 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
       ): Component => {
         const state = context.state as typeof context.state & EscalationRendererState;
         const isPiPreExecutionAbort =
-          isEscalationRequest(context.args) &&
+          hasEscalationProperty(context.args) &&
           context.isError &&
           result.details?.escalation === undefined &&
           result.content.length === 1 &&
@@ -452,10 +509,14 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
       onUpdate: AgentToolUpdateCallback<SandboxBashDetails | undefined> | undefined,
       ctx: ExtensionContext,
     ): Promise<AgentToolResult<SandboxBashDetails | undefined>> {
+      const classification = classifyBashInput(params);
+      if (classification.kind === "invalid") {
+        return createNotRunResult("invalid", classification.message);
+      }
       if (!options.isSandboxActive()) {
         return options.base.execute(id, stripEscalationFields(params), signal, onUpdate, ctx);
       }
-      if (!isEscalationRequest(params)) {
+      if (classification.kind === "default") {
         return options.executeDefault(id, stripEscalationFields(params), signal, onUpdate, ctx);
       }
       return executeEscalatedBash({
@@ -504,5 +565,5 @@ export function createBashEscalationCallTracker(): BashEscalationCallTracker {
 }
 
 export function shouldPreflightBashDomains(input: SandboxBashInput): boolean {
-  return !isEscalationRequest(input);
+  return !hasEscalationProperty(input);
 }

@@ -33,23 +33,22 @@ import {
   type EscalationPromptRequest,
 } from "../src/bash-permissions.ts";
 
-test("sandbox Bash schema remains backward compatible and accepts known permissions", () => {
+test("sandbox Bash schema accepts ordinary and nested escalation inputs", () => {
   assert.equal(Check(sandboxBashSchema, { command: "pnpm test" }), true);
   assert.equal(
     Check(sandboxBashSchema, {
       command: "pnpm install",
       timeout: 30,
-      sandbox_permissions: "require_escalated",
-      justification: "Allow registry access?",
+      escalation: { justification: "Allow registry access?" },
     }),
     true,
   );
   assert.equal(
-    Check(sandboxBashSchema, { command: "pwd", sandbox_permissions: "use_default" }),
-    true,
-  );
-  assert.equal(
-    Check(sandboxBashSchema, { command: "pwd", sandbox_permissions: "always_allow" }),
+    Check(sandboxBashSchema, {
+      command: "pwd",
+      sandbox_permissions: "require_escalated",
+      justification: "legacy",
+    }),
     false,
   );
 });
@@ -67,14 +66,13 @@ test("runtime justification validation counts Unicode code points", () => {
 });
 
 test("escalation helpers preserve ordinary Bash fields and existing details", () => {
-  assert.equal(isEscalationRequest({ sandbox_permissions: "require_escalated" }), true);
-  assert.equal(isEscalationRequest({ sandbox_permissions: "use_default" }), false);
+  assert.equal(isEscalationRequest({ escalation: { justification: "Need local access?" } }), true);
+  assert.equal(isEscalationRequest({}), false);
   assert.deepEqual(
     stripEscalationFields({
       command: "printf exact",
       timeout: 12,
-      sandbox_permissions: "require_escalated",
-      justification: "Need access?",
+      escalation: { justification: "Need access?" },
     }),
     { command: "printf exact", timeout: 12 },
   );
@@ -259,9 +257,8 @@ test("invalid escalation requests fail closed before prompting or execution", as
       toolCallId: "invalid",
       input: {
         command: "never-run",
-        sandbox_permissions: "require_escalated",
-        justification,
-      },
+        escalation: { justification },
+      } as never,
       ctx: rpcContext,
       queue,
       executeLocal,
@@ -281,8 +278,7 @@ test("escalation is unavailable outside an interactive TUI before prompting or e
       toolCallId: "unavailable",
       input: {
         command: "never-run",
-        sandbox_permissions: "require_escalated",
-        justification: "Need local access?",
+        escalation: { justification: "Need local access?" },
       },
       ctx,
       queue: {
@@ -323,8 +319,7 @@ test("approval delegates the exact command and timeout once and preserves Bash d
     input: {
       command: "printf '$HOME'",
       timeout: 17,
-      sandbox_permissions: "require_escalated",
-      justification: "Need the exact local environment?",
+      escalation: { justification: "Need the exact local environment?" },
     },
     ctx: tuiContext,
     queue: allowQueue,
@@ -353,8 +348,7 @@ test("an approved local spawn failure propagates without retry", async () => {
       toolCallId: "spawn-error",
       input: {
         command: "exact",
-        sandbox_permissions: "require_escalated",
-        justification: "Need local execution?",
+        escalation: { justification: "Need local execution?" },
       },
       ctx: tuiContext,
       queue: allowQueue,
@@ -384,8 +378,7 @@ test("every non-approval decision returns a stable not-run result", async () => 
       toolCallId: status,
       input: {
         command: "never-run",
-        sandbox_permissions: "require_escalated",
-        justification: "Need local execution?",
+        escalation: { justification: "Need local execution?" },
       },
       ctx: tuiContext,
       queue: { enqueue: async () => decision },
@@ -414,8 +407,7 @@ test("abort races before local delegation never execute the command", async () =
   };
   const input = {
     command: "never-run",
-    sandbox_permissions: "require_escalated" as const,
-    justification: "Need local execution?",
+    escalation: { justification: "Need local execution?" },
   };
 
   await assert.rejects(
@@ -475,8 +467,7 @@ test("prompt infrastructure failures fail closed while typed aborts propagate", 
     toolCallId: "prompt-failure",
     input: {
       command: "never-run",
-      sandbox_permissions: "require_escalated" as const,
-      justification: "Need local execution?",
+      escalation: { justification: "Need local execution?" },
     },
     ctx: tuiContext,
     executeLocal: async () => {
@@ -564,28 +555,59 @@ test("expanded Bash tool preserves default routing and local behavior when sandb
     getPromptTimeoutSeconds: () => 600,
   });
 
-  await tool.execute(
-    "disabled",
-    {
-      command: "pwd",
-      sandbox_permissions: "require_escalated",
-      justification: "ignored while sandbox is disabled",
-    },
-    undefined,
-    undefined,
-    tuiContext,
-  );
-  assert.deepEqual(calls, ["local"]);
+  for (const [id, input] of [
+    ["disabled-default", { command: "pwd" }],
+    [
+      "disabled-escalation",
+      {
+        command: "pwd",
+        escalation: { justification: "ignored while sandbox is disabled" },
+      },
+    ],
+  ] as const) {
+    await tool.execute(id, input, undefined, undefined, tuiContext);
+  }
+  assert.deepEqual(calls, ["local", "local"]);
   assert.deepEqual(tool.promptGuidelines, BASH_ESCALATION_GUIDELINES);
   assert.ok(tool.promptGuidelines?.every((guideline) => guideline.includes("Bash")));
   assert.notEqual(tool.executionMode, "sequential");
 });
 
+test("malformed escalation fails closed before active or inactive routing", async () => {
+  for (const isSandboxActive of [true, false]) {
+    const calls: string[] = [];
+    const tool = createToolHarness({
+      isSandboxActive,
+      onLocal: () => calls.push("local"),
+      onDefault: () => calls.push("sandbox"),
+      onPrompt: () => {
+        calls.push("prompt");
+        return { action: "allow_once" };
+      },
+    });
+
+    for (const escalation of [null, [], {}, { justification: " \n\t " }]) {
+      const result = await tool.execute(
+        `invalid-${String(isSandboxActive)}`,
+        { command: "never-run", escalation } as never,
+        undefined,
+        undefined,
+        tuiContext,
+      );
+      assert.equal(result.details?.escalation?.status, "invalid");
+    }
+    assert.deepEqual(calls, []);
+  }
+});
+
 test("Bash prompt guidance distinguishes a sandbox failure from a declined escalation", () => {
   const guidance = BASH_ESCALATION_GUIDELINES.join("\n");
 
+  assert.match(guidance, /omit the `escalation` field/i);
+  assert.match(guidance, /`escalation: \{ "justification": "<concise user-facing reason>" \}`/);
   assert.match(guidance, /Do not wait for the user to request escalation separately/);
   assert.match(guidance, /if the user declines that escalation prompt/i);
+  assert.doesNotMatch(guidance, /sandbox_permissions|require_escalated|top-level justification/i);
   assert.doesNotMatch(guidance, /do not retry after a denial/);
 });
 
@@ -600,16 +622,8 @@ test("active default Bash uses the existing sandbox path without prompting", asy
       return { action: "deny", reason: "user" };
     },
   });
-  for (const sandbox_permissions of [undefined, "use_default"] as const) {
-    await tool.execute(
-      `default-${sandbox_permissions ?? "omitted"}`,
-      { command: "pnpm test", sandbox_permissions, justification: "ignored" },
-      undefined,
-      undefined,
-      tuiContext,
-    );
-  }
-  assert.deepEqual(calls, ["sandbox:pnpm test", "sandbox:pnpm test"]);
+  await tool.execute("default", { command: "pnpm test" }, undefined, undefined, tuiContext);
+  assert.deepEqual(calls, ["sandbox:pnpm test"]);
 });
 
 test("active escalated Bash prompts and invokes only the local path", async () => {
@@ -627,8 +641,7 @@ test("active escalated Bash prompts and invokes only the local path", async () =
     "escalated",
     {
       command: "pnpm install",
-      sandbox_permissions: "require_escalated",
-      justification: "Need registry access?",
+      escalation: { justification: "Need registry access?" },
     },
     undefined,
     undefined,
@@ -640,21 +653,14 @@ test("active escalated Bash prompts and invokes only the local path", async () =
 test("only default Bash calls enter domain preflight", () => {
   assert.equal(shouldPreflightBashDomains({ command: "pwd" }), true);
   assert.equal(
-    shouldPreflightBashDomains({ command: "pwd", sandbox_permissions: "use_default" }),
-    true,
-  );
-  assert.equal(
     shouldPreflightBashDomains({
       command: "pwd",
-      sandbox_permissions: "require_escalated",
-      justification: "Need access?",
+      escalation: { justification: "Need access?" },
     }),
     false,
   );
-  assert.equal(
-    shouldPreflightBashDomains({ command: "pwd", sandbox_permissions: "require_escalated" }),
-    false,
-  );
+  assert.equal(shouldPreflightBashDomains({ command: "pwd", escalation: {} } as never), false);
+  assert.equal(shouldPreflightBashDomains({ command: "pwd", escalation: null } as never), false);
 });
 
 class MutableComponent {
@@ -711,8 +717,7 @@ test("Bash renderer delegates stripped inputs, preserves details, and updates du
   const args = {
     command: "pnpm install",
     timeout: 10,
-    sandbox_permissions: "require_escalated" as const,
-    justification: "Need registry?",
+    escalation: { justification: "Need registry?" },
   };
   const state = {};
   const contextBase = {
@@ -783,6 +788,53 @@ test("Bash renderer delegates stripped inputs, preserves details, and updates du
   assert.equal(resultLastComponents[1], resultBaseComponents[0]);
 });
 
+test("malformed escalation rendering reaches a durable invalid marker safely", () => {
+  const base = fakeBashDefinition(async () => textResult("unused"));
+  base.renderCall = (args) => new MutableComponent(`call:${args.command}`);
+  base.renderResult = (result) =>
+    new MutableComponent(
+      `result:${result.content[0]?.type === "text" ? result.content[0].text : ""}`,
+    );
+  const tool = createEscalatingBashToolDefinition({
+    base,
+    label: "bash (sandboxed)",
+    isSandboxActive: () => true,
+    executeDefault: async () => textResult("sandbox"),
+    promptQueue: neverPromptQueue,
+    getPromptTimeoutSeconds: () => 600,
+  });
+  const args = { command: "never-run", escalation: null } as never;
+  const contextBase = {
+    args,
+    toolCallId: "invalid-render",
+    invalidate() {},
+    state: {},
+    cwd: process.cwd(),
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: false,
+    expanded: false,
+    showImages: false,
+    isError: false,
+  };
+  const callComponent = tool.renderCall!(
+    args,
+    renderTheme as never,
+    { ...contextBase, lastComponent: undefined } as never,
+  );
+  tool.renderResult!(
+    {
+      content: [{ type: "text", text: "invalid" }],
+      details: { escalation: { status: "invalid" } },
+    },
+    { expanded: false, isPartial: false },
+    renderTheme as never,
+    { ...contextBase, lastComponent: undefined } as never,
+  );
+
+  assert.match(callComponent.render(100).join("\n"), /outside pi-sandbox — not run \(invalid\)/);
+});
+
 test("inactive Bash hides escalation requests while restored details remain durable", () => {
   const base = fakeBashDefinition(async () => textResult("local"));
   base.renderCall = (args) => new MutableComponent(`call:${args.command}`);
@@ -800,8 +852,7 @@ test("inactive Bash hides escalation requests while restored details remain dura
   });
   const args = {
     command: "pwd",
-    sandbox_permissions: "require_escalated" as const,
-    justification: "ignored while inactive",
+    escalation: { justification: "ignored while inactive" },
   };
   const renderPair = (details: { escalation: { status: "approved_once" } } | undefined) => {
     const state = {};
@@ -865,8 +916,7 @@ test("Pi pre-execution aborts render as terminal not-run status without durable 
     });
     const args = {
       command: "pwd",
-      sandbox_permissions: "require_escalated" as const,
-      justification: "Need local execution?",
+      escalation: { justification: "Need local execution?" },
     };
     const contextBase = {
       args,

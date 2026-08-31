@@ -125,8 +125,9 @@ explicit call:
 ```json
 {
   "command": "pnpm install",
-  "sandbox_permissions": "require_escalated",
-  "justification": "Allow pnpm to reach the registry and update its cache outside this workspace?"
+  "escalation": {
+    "justification": "Allow pnpm to reach the registry and update its cache outside this workspace?"
+  }
 }
 ```
 
@@ -139,8 +140,8 @@ When a sandboxed model Bash command fails, pi-sandbox may append a bounded
 guidance block if the final process attempt has runtime denial evidence or
 matches a cautious compatibility heuristic. The failed call remains a tool
 error and is never retried outside pi-sandbox. In interactive TUI sessions,
-the model can make a separate `sandbox_permissions: "require_escalated"`
-request with a concise justification; the existing human approval prompt is
+the model can make a separate `escalation: { "justification": "..." }`
+request; the existing human approval prompt is
 still required. Headless modes and successful, timed-out, aborted, spawn, or
 unrelated failures receive no guidance.
 

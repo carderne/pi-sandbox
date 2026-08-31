@@ -2,7 +2,7 @@
 
 ## Summary
 
-`pi-sandbox` will associate each sandboxed Bash process with attempt-scoped denial evidence from `@carderne/sandbox-runtime`. When the final process attempt fails, Pi will use that attempt's structured evidence first and a Codex-compatible output heuristic as a fallback. In an interactive TUI where the existing escalation flow is available, an eligible failure remains a tool error and gains instructions for making a separate `sandbox_permissions: "require_escalated"` request.
+`pi-sandbox` will associate each sandboxed Bash process with attempt-scoped denial evidence from `@carderne/sandbox-runtime`. When the final process attempt fails, Pi will use that attempt's structured evidence first and a Codex-compatible output heuristic as a fallback. In an interactive TUI where the existing escalation flow is available, an eligible failure remains a tool error and gains instructions for making a separate `escalation: { "justification": "..." }` request.
 
 Denial detection never runs a command outside the sandbox, requests approval, or retries automatically. The existing human-approved in-sandbox write recovery remains, and only its final process attempt can produce guidance.
 
@@ -10,7 +10,7 @@ This design intentionally limits the two-repository change to attempt attributio
 
 ## Project context
 
-The feature branch already supports explicit Bash escalation through `createEscalatingBashToolDefinition`. A model supplies `sandbox_permissions: "require_escalated"` and a justification; an existing TUI prompt shows the full command, and only human approval permits one local execution.
+The feature branch already supports explicit Bash escalation through `createEscalatingBashToolDefinition`. A model supplies a strict nested `escalation` object with a justification; an existing TUI prompt shows the full command, and only human approval permits one local execution.
 
 The missing piece is fresh context after an ordinary sandboxed Bash failure. Today, `executeDefaultBash` converts errors containing `Operation not permitted` into a normal tool result. That loses Pi's normal tool-error semantics and recognizes only one denial spelling. Runtime monitor events are also keyed by truncated command text, so concurrent identical commands and sequential retries are ambiguous.
 
@@ -215,7 +215,7 @@ The thrown error message is the untouched original message followed once by this
 
 ```text
 --- pi-sandbox guidance ---
-This sandboxed attempt appears to have failed because of a sandbox restriction and was not run outside pi-sandbox. If the command is still needed to complete the user's current request, make one new Bash tool call with `sandbox_permissions: "require_escalated"` and a concise user-facing `justification`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it. If that escalation request is declined, cancelled, times out, or is unavailable, stop and do not request escalation again unless the user later explicitly asks.
+This sandboxed attempt appears to have failed because of a sandbox restriction and was not run outside pi-sandbox. If the command is still needed to complete the user's current request, make one new Bash tool call with `escalation: { "justification": "<concise user-facing reason>" }`. Do not wait for the user to request escalation separately; the approval prompt is where the user decides whether to allow it. If that escalation request is declined, cancelled, times out, or is unavailable, stop and do not request escalation again unless the user later explicitly asks.
 ```
 
 Append suppression is deliberately narrow: suppress only when the original message already ends with the exact complete block above at the expected `\n\n` boundary. A stray `--- pi-sandbox guidance ---` elsewhere in the original text receives a complete trailing block. Reapplying the formatter is idempotent and the original message stays the exact prefix.
