@@ -996,6 +996,96 @@ test("escalation markers use stable requested, approval, and not-run copy", () =
   }
 });
 
+test("Bash escalation not-run results are errors even when execution returned normally", () => {
+  const tracker = createBashEscalationCallTracker();
+
+  for (const status of [
+    "denied",
+    "cancelled",
+    "aborted",
+    "timed_out",
+    "unavailable",
+    "invalid",
+  ] as const) {
+    const result = tracker.handleToolResult({
+      type: "tool_result",
+      toolName: "bash",
+      toolCallId: `not-run-${status}`,
+      input: { command: "never-run" },
+      content: [{ type: "text", text: `not run: ${status}` }],
+      details: { escalation: { status } },
+      isError: false,
+    } as ToolResultEvent);
+
+    assert.deepEqual(result, { isError: true }, status);
+  }
+});
+
+test("Bash escalation tracker ignores nonterminal and unknown detail-carried statuses", () => {
+  const tracker = createBashEscalationCallTracker();
+
+  for (const status of ["requested", "approved_once", "unknown"] as const) {
+    assert.equal(
+      tracker.handleToolResult({
+        type: "tool_result",
+        toolName: "bash",
+        toolCallId: `unchanged-${status}`,
+        input: { command: "pwd" },
+        content: [{ type: "text", text: "unchanged" }],
+        details: { escalation: { status } },
+        isError: false,
+      } as ToolResultEvent),
+      undefined,
+      status,
+    );
+  }
+});
+
+test("tracked Bash escalation status takes precedence over detail-carried status", () => {
+  for (const [trackedStatus, detailStatus, expected] of [
+    [
+      "approved_once",
+      "denied",
+      {
+        details: {
+          fullOutputPath: "/tmp/full-output",
+          escalation: { status: "approved_once" },
+        },
+      },
+    ],
+    [
+      "aborted",
+      "approved_once",
+      {
+        details: {
+          fullOutputPath: "/tmp/full-output",
+          escalation: { status: "aborted" },
+        },
+        isError: true,
+      },
+    ],
+  ] as const) {
+    const tracker = createBashEscalationCallTracker();
+    if (trackedStatus === "approved_once") tracker.markApproved(trackedStatus);
+    else tracker.markAborted(trackedStatus);
+
+    const result = tracker.handleToolResult({
+      type: "tool_result",
+      toolName: "bash",
+      toolCallId: trackedStatus,
+      input: { command: "never-run" },
+      content: [{ type: "text", text: "result" }],
+      details: {
+        fullOutputPath: "/tmp/full-output",
+        escalation: { status: detailStatus },
+      },
+      isError: false,
+    } as ToolResultEvent);
+
+    assert.deepEqual(result, expected, trackedStatus);
+  }
+});
+
 test("approved Bash failures retain their marker through Pi's final tool_result", () => {
   const tracker = createBashEscalationCallTracker();
   tracker.markApproved("spawn-error");
@@ -1033,6 +1123,7 @@ test("Bash escalation tracker restores aborted metadata and consumes tracker sta
       fullOutputPath: "/tmp/full-output",
       escalation: { status: "aborted" },
     },
+    isError: true,
   });
   assert.equal(tracker.handleToolResult(event), undefined);
 });

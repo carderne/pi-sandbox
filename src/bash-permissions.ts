@@ -50,6 +50,26 @@ export type BashEscalationStatus =
   | "unavailable"
   | "invalid";
 
+const BASH_ESCALATION_STATUSES: ReadonlySet<unknown> = new Set<BashEscalationStatus>([
+  "requested",
+  "approved_once",
+  "aborted",
+  "denied",
+  "cancelled",
+  "timed_out",
+  "unavailable",
+  "invalid",
+]);
+
+const NOT_RUN_ESCALATION_STATUSES: ReadonlySet<unknown> = new Set<BashEscalationStatus>([
+  "aborted",
+  "denied",
+  "cancelled",
+  "timed_out",
+  "unavailable",
+  "invalid",
+]);
+
 export interface SandboxBashDetails extends BashToolDetails {
   escalation?: { status: BashEscalationStatus };
 }
@@ -100,6 +120,16 @@ export function validateEscalationJustification(value: unknown): JustificationVa
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function escalationStatusFromDetails(details: unknown): BashEscalationStatus | undefined {
+  if (!isRecord(details) || !isRecord(details.escalation)) return undefined;
+  const status = details.escalation.status;
+  return BASH_ESCALATION_STATUSES.has(status) ? (status as BashEscalationStatus) : undefined;
+}
+
+function isNotRunEscalationStatus(status: BashEscalationStatus): boolean {
+  return NOT_RUN_ESCALATION_STATUSES.has(status);
 }
 
 export function hasEscalationProperty(input: unknown): boolean {
@@ -540,7 +570,9 @@ export function createEscalatingBashToolDefinition(options: CreateEscalatingBash
 export interface BashEscalationCallTracker {
   markApproved(toolCallId: string): void;
   markAborted(toolCallId: string): void;
-  handleToolResult(event: ToolResultEvent): { details: SandboxBashDetails } | undefined;
+  handleToolResult(
+    event: ToolResultEvent,
+  ): { details?: SandboxBashDetails; isError?: boolean } | undefined;
 }
 
 export function createBashEscalationCallTracker(): BashEscalationCallTracker {
@@ -554,11 +586,17 @@ export function createBashEscalationCallTracker(): BashEscalationCallTracker {
     },
     handleToolResult(event) {
       if (!isBashToolResult(event)) return undefined;
-      const status = statuses.get(event.toolCallId);
-      if (status === undefined) return undefined;
+      const trackedStatus = statuses.get(event.toolCallId);
+      if (trackedStatus === undefined) {
+        const detailStatus = escalationStatusFromDetails(event.details);
+        return detailStatus !== undefined && isNotRunEscalationStatus(detailStatus)
+          ? { isError: true }
+          : undefined;
+      }
       statuses.delete(event.toolCallId);
       return {
-        details: withEscalationStatus(event.details, status),
+        details: withEscalationStatus(event.details, trackedStatus),
+        ...(isNotRunEscalationStatus(trackedStatus) ? { isError: true } : {}),
       };
     },
   };

@@ -144,8 +144,34 @@ test("registered Bash result hook restores terminal metadata and consumes tracke
 
     assert.deepEqual(harness.toolResultHandler(event), {
       details: { escalation: { status } },
+      ...(status === "aborted" ? { isError: true } : {}),
     });
     assert.equal(harness.toolResultHandler(event), undefined);
+  }
+});
+
+test("registered Bash result hook marks every detail-carried not-run outcome as an error", () => {
+  const harness = createHookHarness();
+
+  for (const status of [
+    "denied",
+    "cancelled",
+    "aborted",
+    "timed_out",
+    "unavailable",
+    "invalid",
+  ] as const) {
+    const result = harness.toolResultHandler({
+      type: "tool_result",
+      toolName: "bash",
+      toolCallId: `not-run-${status}`,
+      input: { command: "never-run" },
+      content: [{ type: "text", text: `not run: ${status}` }],
+      details: { escalation: { status } },
+      isError: false,
+    } as ToolResultEvent);
+
+    assert.deepEqual(result, { isError: true }, status);
   }
 });
 
