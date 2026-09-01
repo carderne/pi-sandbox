@@ -178,7 +178,7 @@ export async function showBashEscalationPrompt(
             ...wrapTextWithAnsi(
               theme.fg(
                 "warning",
-                "This command bypasses all pi-sandbox filesystem and network rules, including configured deny rules. Parent OS or container restrictions may still apply.",
+                "This command bypasses all pi-sandbox filesystem and network rules.",
               ),
               safeWidth,
             ),
