@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock, type TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { SandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
@@ -99,6 +100,16 @@ test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
   assert.equal(runtime.filesystem?.allowRead?.includes(canonicalizePath("/tmp")), true);
   assert.deepEqual(runtime.filesystem?.allowWrite, [canonicalizePath("/tmp")]);
   assert.deepEqual(runtime.filesystem?.denyWrite, ["*.key"]);
+});
+
+test("buildRuntimeConfig exposes the bundled seccomp helper on Linux", () => {
+  const runtime = buildRuntimeConfig(DEFAULT_CONFIG, undefined, "linux");
+  const runtimeEntryUrl = import.meta.resolve("@carderne/sandbox-runtime");
+  const seccompPath = canonicalizePath(
+    fileURLToPath(new URL("../vendor/seccomp", runtimeEntryUrl)),
+  );
+
+  assert.equal(runtime.filesystem?.allowRead?.includes(seccompPath), true);
 });
 
 test("resolveAllowances makes configured and session write paths readable", () => {
