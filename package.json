@@ -1,6 +1,6 @@
 {
   "name": "pi-sandbox",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "OS-level sandboxing for pi with interactive permission prompts",
   "keywords": [
     "pi-package",
