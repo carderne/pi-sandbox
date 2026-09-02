@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   SandboxManager,
@@ -33,6 +34,15 @@ const canonicalizeFilesystemPattern = (path: string) =>
 const canonicalizeFilesystemPatterns = (paths: string[]) =>
   unique(paths.map(canonicalizeFilesystemPattern));
 
+function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
+  if (platform !== "linux") return [];
+
+  // apply-seccomp executes inside the Bubblewrap namespace, so broad rules
+  // such as denyRead: ["/home"] must not hide the runtime's bundled helper.
+  const runtimeEntryUrl = import.meta.resolve("@carderne/sandbox-runtime");
+  return [fileURLToPath(new URL("../vendor/seccomp", runtimeEntryUrl))];
+}
+
 export function resolveAllowances(
   config: SandboxConfig,
   allowances?: SessionAllowances,
@@ -60,6 +70,7 @@ export function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCa
 export function buildRuntimeConfig(
   config: SandboxConfig,
   allowances?: SessionAllowances,
+  platform: NodeJS.Platform = process.platform,
 ): SandboxRuntimeConfig {
   const effective = resolveAllowances(config, allowances);
 
@@ -72,7 +83,10 @@ export function buildRuntimeConfig(
     filesystem: {
       disabled: config.filesystem?.disabled,
       denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? []),
-      allowRead: canonicalizeFilesystemPatterns(effective.readPaths),
+      allowRead: canonicalizeFilesystemPatterns([
+        ...effective.readPaths,
+        ...sandboxRuntimeReadPaths(platform),
+      ]),
       allowWrite: canonicalizeFilesystemPatterns(effective.writePaths),
       denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? []),
     },
