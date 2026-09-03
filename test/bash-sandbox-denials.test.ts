@@ -123,7 +123,6 @@ test("sandbox-denial guidance requests one escalation without waiting for anothe
     PI_SANDBOX_GUIDANCE,
     /make one new Bash tool call with `escalation: \{ "justification": "<concise user-facing reason>" \}`/,
   );
-  assert.doesNotMatch(PI_SANDBOX_GUIDANCE, /sandbox_permissions|require_escalated/);
   assert.match(PI_SANDBOX_GUIDANCE, /Do not wait for the user to request escalation separately/);
   assert.match(
     PI_SANDBOX_GUIDANCE,

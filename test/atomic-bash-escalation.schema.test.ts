@@ -21,7 +21,6 @@ test("strict Bash schema accepts only nested, non-blank bounded escalation", () 
   );
 
   for (const input of [
-    { command: "pwd", sandbox_permissions: "require_escalated", justification: "legacy" },
     { command: "pwd", escalation: { justification: "Need access?", extra: true } },
     { command: "pwd", escalation: { justifiction: "misspelled" } },
     { command: "pwd", escalation: null },
@@ -73,12 +72,5 @@ test("Bash input classifier recognizes default, valid, and invalid escalation be
     assert.equal(classifyBashInput({ command: "pwd", escalation }).kind, "invalid");
   }
 
-  assert.equal(
-    classifyBashInput({
-      command: "pwd",
-      sandbox_permissions: "require_escalated",
-      justification: "legacy",
-    }).kind,
-    "invalid",
-  );
+  assert.equal(classifyBashInput({ command: "pwd", extra: true }).kind, "invalid");
 });

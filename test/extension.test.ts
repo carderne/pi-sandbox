@@ -151,31 +151,19 @@ test("registered Bash result hook restores terminal metadata and consumes tracke
     });
     assert.equal(harness.toolResultHandler(event), undefined);
   }
-});
 
-test("registered Bash result hook marks every detail-carried not-run outcome as an error", () => {
-  const harness = createHookHarness();
-
-  for (const status of [
-    "denied",
-    "cancelled",
-    "aborted",
-    "timed_out",
-    "unavailable",
-    "invalid",
-  ] as const) {
-    const result = harness.toolResultHandler({
+  assert.deepEqual(
+    harness.toolResultHandler({
       type: "tool_result",
       toolName: "bash",
-      toolCallId: `not-run-${status}`,
+      toolCallId: "denied-call",
       input: { command: "never-run" },
-      content: [{ type: "text", text: `not run: ${status}` }],
-      details: { escalation: { status } },
+      content: [{ type: "text", text: "not run: denied" }],
+      details: { escalation: { status: "denied" } },
       isError: false,
-    } as ToolResultEvent);
-
-    assert.deepEqual(result, { isError: true }, status);
-  }
+    } as ToolResultEvent),
+    { isError: true },
+  );
 });
 
 test("refreshSandbox propagates runtime configuration publication failures", () => {

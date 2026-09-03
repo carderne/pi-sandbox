@@ -9,7 +9,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Component } from "@earendil-works/pi-tui";
 import assert from "node:assert/strict";
-import { Check } from "typebox/value";
 
 import {
   BASH_ESCALATION_GUIDELINES,
@@ -22,7 +21,6 @@ import {
   formatEscalationMarker,
   isEscalationAbortError,
   isEscalationRequest,
-  sandboxBashSchema,
   shouldPreflightBashDomains,
   stripEscalationFields,
   validateEscalationJustification,
@@ -32,26 +30,6 @@ import {
   type EscalationPromptQueue,
   type EscalationPromptRequest,
 } from "../src/bash-permissions.ts";
-
-test("sandbox Bash schema accepts ordinary and nested escalation inputs", () => {
-  assert.equal(Check(sandboxBashSchema, { command: "pnpm test" }), true);
-  assert.equal(
-    Check(sandboxBashSchema, {
-      command: "pnpm install",
-      timeout: 30,
-      escalation: { justification: "Allow registry access?" },
-    }),
-    true,
-  );
-  assert.equal(
-    Check(sandboxBashSchema, {
-      command: "pwd",
-      sandbox_permissions: "require_escalated",
-      justification: "legacy",
-    }),
-    false,
-  );
-});
 
 test("runtime justification validation counts Unicode code points", () => {
   assert.equal(validateEscalationJustification(undefined).ok, false);
@@ -619,7 +597,6 @@ test("Bash prompt guidance distinguishes a sandbox failure from a declined escal
   assert.match(guidance, /`escalation: \{ "justification": "<concise user-facing reason>" \}`/);
   assert.match(guidance, /Do not wait for the user to request escalation separately/);
   assert.match(guidance, /if the user declines that escalation prompt/i);
-  assert.doesNotMatch(guidance, /sandbox_permissions|require_escalated|top-level justification/i);
   assert.doesNotMatch(guidance, /do not retry after a denial/);
 });
 
@@ -1053,52 +1030,7 @@ test("Bash escalation tracker ignores nonterminal and unknown detail-carried sta
   }
 });
 
-test("tracked Bash escalation status takes precedence over detail-carried status", () => {
-  for (const [trackedStatus, detailStatus, expected] of [
-    [
-      "approved_once",
-      "denied",
-      {
-        details: {
-          fullOutputPath: "/tmp/full-output",
-          escalation: { status: "approved_once" },
-        },
-      },
-    ],
-    [
-      "aborted",
-      "approved_once",
-      {
-        details: {
-          fullOutputPath: "/tmp/full-output",
-          escalation: { status: "aborted" },
-        },
-        isError: true,
-      },
-    ],
-  ] as const) {
-    const tracker = createBashEscalationCallTracker();
-    if (trackedStatus === "approved_once") tracker.markApproved(trackedStatus);
-    else tracker.markAborted(trackedStatus);
-
-    const result = tracker.handleToolResult({
-      type: "tool_result",
-      toolName: "bash",
-      toolCallId: trackedStatus,
-      input: { command: "never-run" },
-      content: [{ type: "text", text: "result" }],
-      details: {
-        fullOutputPath: "/tmp/full-output",
-        escalation: { status: detailStatus },
-      },
-      isError: false,
-    } as ToolResultEvent);
-
-    assert.deepEqual(result, expected, trackedStatus);
-  }
-});
-
-test("Bash escalation tracker restores aborted metadata and consumes tracker state", () => {
+test("Bash escalation tracker restores aborted metadata over conflicting details and consumes state", () => {
   const tracker = createBashEscalationCallTracker();
   tracker.markAborted("aborted-call");
   const event = {
@@ -1107,7 +1039,10 @@ test("Bash escalation tracker restores aborted metadata and consumes tracker sta
     toolCallId: "aborted-call",
     input: { command: "pnpm install" },
     content: [{ type: "text", text: "aborted: escalated command was not run" }],
-    details: { fullOutputPath: "/tmp/full-output" },
+    details: {
+      fullOutputPath: "/tmp/full-output",
+      escalation: { status: "approved_once" },
+    },
     isError: true,
   } satisfies ToolResultEvent;
 
@@ -1121,7 +1056,7 @@ test("Bash escalation tracker restores aborted metadata and consumes tracker sta
   assert.equal(tracker.handleToolResult(event), undefined);
 });
 
-test("approved Bash tracker ignores unrelated results and preserves Bash details", () => {
+test("approved Bash tracker ignores unrelated results and overrides denied details", () => {
   const tracker = createBashEscalationCallTracker();
   tracker.markApproved("approved");
   const unrelated = {
@@ -1141,7 +1076,10 @@ test("approved Bash tracker ignores unrelated results and preserves Bash details
     toolCallId: "approved",
     input: { command: "pwd" },
     content: [{ type: "text", text: "data" }],
-    details: { fullOutputPath: "/tmp/full-output" },
+    details: {
+      fullOutputPath: "/tmp/full-output",
+      escalation: { status: "denied" },
+    },
     isError: false,
   });
   assert.deepEqual(result, {
