@@ -296,7 +296,7 @@ async function runAttributed(
   return { execution, chunks };
 }
 
-test("attributed exec resolves when a daemonized grandchild holds the stdio pipes", async (t) => {
+test("attributed exec resolves when a background descendant holds the stdio pipes", async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-attributed-exec-"));
   const { command, pidPath } = backgroundNodeCommand(cwd, "setInterval(() => {}, 1000);");
   const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => ({
@@ -318,15 +318,31 @@ test("attributed exec resolves when a daemonized grandchild holds the stdio pipe
     prepare.mock.restore();
     rmSync(cwd, { recursive: true, force: true });
   });
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("attributed exec did not resolve after child exit")), 1000);
+    watchdog = setTimeout(
+      () => reject(new Error("attributed exec did not resolve after child exit")),
+      1000,
+    );
   });
 
-  assert.deepEqual(await Promise.race([execution, timeout]), { exitCode: 0 });
-  await attributed.finished;
+  try {
+    assert.deepEqual(await Promise.race([execution, timeout]), { exitCode: 0 });
+    await attributed.finished;
+  } finally {
+    if (watchdog !== undefined) clearTimeout(watchdog);
+  }
 });
 
 test("command timeout excludes attributed attempt finalization time", async () => {
+  let signalFinalizationStarted!: () => void;
+  const finalizationStarted = new Promise<void>((resolve) => {
+    signalFinalizationStarted = resolve;
+  });
+  let releaseFinalization!: () => void;
+  const finalizationReleased = new Promise<void>((resolve) => {
+    releaseFinalization = resolve;
+  });
   const prepare = mock.method(SandboxManager, "prepareSandboxAttempt", async () => ({
     attempt: { attemptId: "slow-finish-timeout" } as never,
     argv: ["/bin/sh", "-c", "exit 0"],
@@ -335,12 +351,16 @@ test("command timeout excludes attributed attempt finalization time", async () =
   }));
   const cleanup = mock.method(SandboxManager, "cleanupAfterCommand", () => {});
   const finish = mock.method(SandboxManager, "finishSandboxAttempt", async () => {
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    signalFinalizationStarted();
+    await finalizationReleased;
     return { denials: [] };
   });
   try {
     const attributed = createAttributedSandboxedBashOps();
-    const { execution } = await runAttributed(attributed, { timeout: 0.1 });
+    const { execution } = await runAttributed(attributed, { timeout: 0.05 });
+    await finalizationStarted;
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    releaseFinalization();
     assert.deepEqual(await execution, { exitCode: 0 });
     assert.equal((await attributed.finished).observation.termination, "exit");
   } finally {

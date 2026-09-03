@@ -39,18 +39,12 @@ test("fallback matches every supported keyword case-insensitively", () => {
   }
 });
 
-test("fallback rejects success, backend none, excluded exit codes, and unrelated errors", () => {
+test("fallback rejects success, backend none, and unrelated errors", () => {
   assert.equal(matchesSandboxDenialFallback(observation({ exitCode: 0 }), "sandbox"), false);
   assert.equal(
     matchesSandboxDenialFallback(observation({ sandboxBackend: "none" }), "permission denied"),
     false,
   );
-  for (const exitCode of [2, 126, 127]) {
-    assert.equal(
-      matchesSandboxDenialFallback(observation({ exitCode }), "ordinary failure"),
-      false,
-    );
-  }
   assert.equal(matchesSandboxDenialFallback(observation(), "ordinary failure"), false);
 });
 

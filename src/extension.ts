@@ -137,6 +137,10 @@ export function createSandboxBashOperationRoutes(
   };
 }
 
+export interface PiSandboxExtensionDependencies {
+  sandboxBashOperationRoutes?: ReturnType<typeof createSandboxBashOperationRoutes>;
+}
+
 function retainedPiText(result: AgentToolResult<any>): string {
   return result.content
     .filter((content) => content.type === "text")
@@ -171,7 +175,10 @@ export async function captureAttributedBashAttempt<Result extends AgentToolResul
   return { ok: true, result, finished };
 }
 
-export default function (pi: ExtensionAPI) {
+export function registerPiSandboxExtension(
+  pi: ExtensionAPI,
+  dependencies: PiSandboxExtensionDependencies = {},
+): void {
   pi.registerFlag("no-sandbox", {
     description: "Disable OS-level sandboxing for bash commands",
     type: "boolean",
@@ -185,7 +192,8 @@ export default function (pi: ExtensionAPI) {
     showBashEscalationPrompt(pi, request),
   );
   const bashEscalationCalls = createBashEscalationCallTracker();
-  const sandboxBashOperationRoutes = createSandboxBashOperationRoutes();
+  const sandboxBashOperationRoutes =
+    dependencies.sandboxBashOperationRoutes ?? createSandboxBashOperationRoutes();
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
@@ -543,4 +551,8 @@ export default function (pi: ExtensionAPI) {
       );
     },
   });
+}
+
+export default function (pi: ExtensionAPI): void {
+  registerPiSandboxExtension(pi);
 }

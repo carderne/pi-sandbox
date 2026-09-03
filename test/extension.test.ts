@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test, { mock } from "node:test";
 
 import { SandboxManager } from "@carderne/sandbox-runtime";
@@ -23,6 +25,7 @@ import {
   captureAttributedBashAttempt,
   createSandboxBashOperationRoutes,
   refreshSandbox,
+  registerPiSandboxExtension,
   registerBashEscalationHooks,
   sandboxGuidanceAvailable,
 } from "../src/extension.ts";
@@ -219,21 +222,113 @@ test("sandbox Bash operation routes keep model and user factories separate", () 
   assert.deepEqual(calls, ["legacy"]);
 });
 
-test("model Bash uses attributed operations while user_bash stays handleless", () => {
-  const source = readFileSync(new URL("../src/extension.ts", import.meta.url), "utf8");
-  const modelStart = source.indexOf("const executeDefaultBash");
-  const userStart = source.indexOf('pi.on("user_bash"');
-  const nextHook = source.indexOf('pi.on("tool_call"', userStart);
-  assert.notEqual(modelStart, -1);
-  assert.notEqual(userStart, -1);
-  assert.notEqual(nextHook, -1);
+test("registered model Bash and user_bash use their respective operation routes", async () => {
+  type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+  type RegisteredBashTool = {
+    execute(
+      toolCallId: string,
+      params: { command: string },
+      signal: AbortSignal | undefined,
+      onUpdate: undefined,
+      ctx: ExtensionContext,
+    ): Promise<unknown>;
+  };
 
-  const modelSection = source.slice(modelStart, userStart);
-  const userSection = source.slice(userStart, nextHook);
-  assert.match(modelSection, /sandboxBashOperationRoutes\.model/);
-  assert.doesNotMatch(modelSection, /operations:\s*createSandboxedBashOps/);
-  assert.match(userSection, /operations:\s*sandboxBashOperationRoutes\.user/);
-  assert.doesNotMatch(userSection, /createAttributedSandboxedBashOps/);
+  const testRoot = mkdtempSync(join(tmpdir(), "pi-sandbox-extension-routing-"));
+  const handlers = new Map<string, Handler[]>();
+  let registeredBash: RegisteredBashTool | undefined;
+  const pi = {
+    events: { emit() {} },
+    getFlag: () => false,
+    on(event: string, handler: Handler) {
+      const registered = handlers.get(event) ?? [];
+      registered.push(handler);
+      handlers.set(event, registered);
+    },
+    registerCommand() {},
+    registerFlag() {},
+    registerShortcut() {},
+    registerTool(tool: RegisteredBashTool) {
+      registeredBash = tool;
+    },
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    cwd: join(testRoot, "project"),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      notify() {},
+      setStatus() {},
+      theme: { fg: (_color: string, text: string) => text },
+    },
+  } as unknown as ExtensionContext;
+  const calls: Array<{ route: "model" | "user"; shellPath?: string; sshProxy: boolean }> = [];
+  const operations: BashOperations = {
+    async exec() {
+      return { exitCode: 0 };
+    },
+  };
+  const routes = {
+    model(shellPath?: string, sshProxy = true) {
+      calls.push({ route: "model", shellPath, sshProxy });
+      return {
+        operations,
+        finished: Promise.resolve({
+          observation: {
+            sandboxBackend: "linux-bwrap" as const,
+            exitCode: 0,
+            signal: null,
+            termination: "exit" as const,
+          },
+          denials: [],
+        }),
+      };
+    },
+    user(shellPath?: string, sshProxy = true) {
+      calls.push({ route: "user", shellPath, sshProxy });
+      return operations;
+    },
+  };
+  const initialize = mock.method(SandboxManager, "initialize", async () => {});
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const originalNodeUseEnvProxy = process.env.NODE_USE_ENV_PROXY;
+  process.env.PI_CODING_AGENT_DIR = join(testRoot, "agent");
+
+  try {
+    registerPiSandboxExtension(pi, { sandboxBashOperationRoutes: routes });
+    const sessionStart = handlers.get("session_start")?.[0];
+    const userBash = handlers.get("user_bash")?.[0];
+    assert.ok(sessionStart);
+    assert.ok(userBash);
+    assert.ok(registeredBash);
+
+    await sessionStart({ type: "session_start" }, ctx);
+    await registeredBash.execute(
+      "model-call",
+      { command: "printf model" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.deepEqual(calls, [{ route: "model", shellPath: undefined, sshProxy: true }]);
+
+    const userResult = (await userBash(
+      { type: "user_bash", command: "printf user", excludeFromContext: false, cwd: ctx.cwd },
+      ctx,
+    )) as { operations?: BashOperations };
+    assert.equal(userResult.operations, operations);
+    assert.deepEqual(calls, [
+      { route: "model", shellPath: undefined, sshProxy: true },
+      { route: "user", shellPath: undefined, sshProxy: true },
+    ]);
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    if (originalNodeUseEnvProxy === undefined) delete process.env.NODE_USE_ENV_PROXY;
+    else process.env.NODE_USE_ENV_PROXY = originalNodeUseEnvProxy;
+    initialize.mock.restore();
+    rmSync(testRoot, { recursive: true, force: true });
+  }
 });
 
 const bashContext = {

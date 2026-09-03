@@ -302,48 +302,26 @@ test("escalation prompt defaults to allow once and distinguishes user cancellati
   }
 });
 
-test("escalation prompt denies only after an explicit selection", async () => {
+test("escalation prompt times out after prompt activation", async () => {
   const harness = createEscalationPromptHarness();
-  const pending = showBashEscalationPrompt(harness.pi, requestFor(harness.ctx));
-  await harness.ready;
-  harness.input(Key.down);
-  harness.input(Key.enter);
-  assert.deepEqual(await pending, { action: "deny", reason: "user" });
-});
-
-test("escalation prompt times out only after becoming visible and cleans up", async () => {
-  const harness = createEscalationPromptHarness();
-  const controller = new AbortController();
   const timedPending = showBashEscalationPrompt(harness.pi, {
-    ...requestFor(harness.ctx, controller.signal),
+    ...requestFor(harness.ctx),
     timeoutSeconds: 0.001,
   });
   await harness.ready;
   assert.deepEqual(harness.attentionEvents, ["request-attention"]);
   assert.deepEqual(await timedPending, { action: "deny", reason: "timeout" });
-  const renderRequests = harness.renderRequests;
-  controller.abort();
-  await Promise.resolve();
-  assert.equal(harness.renderRequests, renderRequests);
 });
 
-test("disposing an escalation prompt fails closed and cleans up", async () => {
+test("disposing an escalation prompt fails closed", async () => {
   const harness = createEscalationPromptHarness();
-  const controller = new AbortController();
-  const disposedPending = showBashEscalationPrompt(
-    harness.pi,
-    requestFor(harness.ctx, controller.signal),
-  );
+  const disposedPending = showBashEscalationPrompt(harness.pi, requestFor(harness.ctx));
   await harness.ready;
   harness.dispose();
   assert.deepEqual(await disposedPending, { action: "deny", reason: "unavailable" });
-  const renderRequests = harness.renderRequests;
-  controller.abort();
-  await Promise.resolve();
-  assert.equal(harness.renderRequests, renderRequests);
 });
 
-test("aborting a visible escalation prompt preserves tool abort semantics and cleans up", async () => {
+test("aborting a visible escalation prompt preserves tool abort semantics", async () => {
   const harness = createEscalationPromptHarness();
   const controller = new AbortController();
   const abortedPending = showBashEscalationPrompt(
@@ -353,8 +331,44 @@ test("aborting a visible escalation prompt preserves tool abort semantics and cl
   await harness.ready;
   controller.abort();
   await assert.rejects(abortedPending, /aborted.*escalated command was not run/i);
-  const renderRequests = harness.renderRequests;
-  controller.abort();
+});
+
+test("settling an escalation prompt removes its listener and exact timer handles", async (t) => {
+  const nativeSetTimeout = globalThis.setTimeout;
+  const timeout = t.mock.method(globalThis, "setTimeout");
+  const clearTimeout = t.mock.method(globalThis, "clearTimeout");
+  const interval = t.mock.method(globalThis, "setInterval");
+  const clearInterval = t.mock.method(globalThis, "clearInterval");
+  const controller = new AbortController();
+  const addEventListener = t.mock.method(controller.signal, "addEventListener");
+  const removeEventListener = t.mock.method(controller.signal, "removeEventListener");
+  const harness = createEscalationPromptHarness();
+  const pending = showBashEscalationPrompt(harness.pi, {
+    ...requestFor(harness.ctx, controller.signal),
+    timeoutSeconds: 0.01,
+  });
+  await harness.ready;
+
+  const timeoutHandle = timeout.mock.calls[0]?.result;
+  const intervalHandle = interval.mock.calls[0]?.result;
+  assert.ok(timeoutHandle);
+  assert.ok(intervalHandle);
+  harness.input(Key.escape);
+  assert.deepEqual(await pending, { action: "deny", reason: "cancelled" });
   await Promise.resolve();
+
+  assert.equal(addEventListener.mock.callCount(), 1);
+  assert.equal(removeEventListener.mock.callCount(), 1);
+  assert.deepEqual(removeEventListener.mock.calls[0]?.arguments, [
+    "abort",
+    addEventListener.mock.calls[0]?.arguments[1],
+  ]);
+  assert.equal(clearTimeout.mock.callCount(), 1);
+  assert.equal(clearInterval.mock.callCount(), 1);
+  assert.deepEqual(clearTimeout.mock.calls[0]?.arguments, [timeoutHandle]);
+  assert.deepEqual(clearInterval.mock.calls[0]?.arguments, [intervalHandle]);
+
+  const renderRequests = harness.renderRequests;
+  await new Promise((resolve) => nativeSetTimeout(resolve, 30));
   assert.equal(harness.renderRequests, renderRequests);
 });

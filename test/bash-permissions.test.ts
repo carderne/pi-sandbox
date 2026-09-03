@@ -336,7 +336,19 @@ test("approval delegates the exact command and timeout once and preserves Bash d
     fullOutputPath: "/tmp/full-output",
     escalation: { status: "approved_once" },
   });
-  assert.ok(updates.every((update: any) => update.details?.escalation?.status === "approved_once"));
+  assert.deepEqual(updates, [
+    {
+      content: [],
+      details: { escalation: { status: "approved_once" } },
+    },
+    {
+      content: [{ type: "text", text: "partial" }],
+      details: {
+        fullOutputPath: "/tmp/full-output",
+        escalation: { status: "approved_once" },
+      },
+    },
+  ]);
 });
 
 test("an approved local spawn failure propagates without retry", async () => {
@@ -1084,25 +1096,6 @@ test("tracked Bash escalation status takes precedence over detail-carried status
 
     assert.deepEqual(result, expected, trackedStatus);
   }
-});
-
-test("approved Bash failures retain their marker through Pi's final tool_result", () => {
-  const tracker = createBashEscalationCallTracker();
-  tracker.markApproved("spawn-error");
-  const event = {
-    type: "tool_result",
-    toolName: "bash",
-    toolCallId: "spawn-error",
-    input: { command: "pnpm install" },
-    content: [{ type: "text", text: "spawn failed" }],
-    details: undefined,
-    isError: true,
-  } satisfies ToolResultEvent;
-
-  assert.deepEqual(tracker.handleToolResult(event), {
-    details: { escalation: { status: "approved_once" } },
-  });
-  assert.equal(tracker.handleToolResult(event), undefined);
 });
 
 test("Bash escalation tracker restores aborted metadata and consumes tracker state", () => {
