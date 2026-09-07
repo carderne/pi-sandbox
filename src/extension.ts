@@ -25,7 +25,7 @@ import {
   createSandboxedBashOps,
   extractBlockedWritePath,
   initializeSandbox,
-  reinitializeSandbox,
+  updateSandboxConfig,
   resolveAllowances,
   type SessionAllowances,
   supportsNodeEnvProxy,
@@ -64,9 +64,9 @@ export default function (pi: ExtensionAPI) {
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     try {
-      await reinitializeSandbox(loadConfig(cwd), allowances);
+      updateSandboxConfig(loadConfig(cwd), allowances);
     } catch (error) {
-      console.error(`Warning: Failed to reinitialize sandbox: ${error}`);
+      console.error(`Warning: Failed to update sandbox configuration: ${error}`);
     }
   }
 
