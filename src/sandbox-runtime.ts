@@ -2,15 +2,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import {
-  SandboxManager,
-  type SandboxAskCallback,
-  type SandboxRuntimeConfig,
-} from "@carderne/sandbox-runtime";
+import { SandboxManager, type SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 
 import { type SandboxConfig } from "./config.ts";
-import { canonicalizePath, domainIsAllowed } from "./policy.ts";
+import { canonicalizePath } from "./policy.ts";
 
 export interface SessionAllowances {
   domains: string[];
@@ -63,10 +59,6 @@ export function resolveAllowances(
   };
 }
 
-export function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCallback {
-  return async ({ host }) => domainIsAllowed(host, allowedDomains);
-}
-
 export function buildRuntimeConfig(
   config: SandboxConfig,
   allowances?: SessionAllowances,
@@ -103,18 +95,15 @@ export async function initializeSandbox(
   allowances?: SessionAllowances,
 ): Promise<void> {
   const runtimeConfig = buildRuntimeConfig(config, allowances);
-  await SandboxManager.initialize(
-    runtimeConfig,
-    createNetworkAskCallback(runtimeConfig.network?.allowedDomains ?? []),
-  );
+  // The runtime checks its live allowlist. Permission prompts happen before
+  // execution; a callback capturing this initial list could re-allow removed domains.
+  await SandboxManager.initialize(runtimeConfig);
 }
 
-export async function reinitializeSandbox(
-  config: SandboxConfig,
-  allowances: SessionAllowances,
-): Promise<void> {
-  await SandboxManager.reset();
-  await initializeSandbox(config, allowances);
+export function updateSandboxConfig(config: SandboxConfig, allowances: SessionAllowances): void {
+  // Permission updates must not tear down the proxy used by concurrent commands.
+  // Network rules apply immediately; new commands pick up filesystem rules when wrapped.
+  SandboxManager.updateConfig(buildRuntimeConfig(config, allowances));
 }
 
 export function supportsNodeEnvProxy(version: string): boolean {
