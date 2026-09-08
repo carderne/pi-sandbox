@@ -1,8 +1,9 @@
+import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
+
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { SandboxManager, type SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 
 import { type SandboxConfig } from "./config.ts";
@@ -91,19 +92,24 @@ export function buildRuntimeConfig(
 }
 
 export async function initializeSandbox(
+  manager: ISandboxManager,
   config: SandboxConfig,
   allowances?: SessionAllowances,
 ): Promise<void> {
   const runtimeConfig = buildRuntimeConfig(config, allowances);
   // The runtime checks its live allowlist. Permission prompts happen before
   // execution; a callback capturing this initial list could re-allow removed domains.
-  await SandboxManager.initialize(runtimeConfig);
+  await manager.initialize(runtimeConfig);
 }
 
-export function updateSandboxConfig(config: SandboxConfig, allowances: SessionAllowances): void {
+export function updateSandboxConfig(
+  manager: ISandboxManager,
+  config: SandboxConfig,
+  allowances: SessionAllowances,
+): void {
   // Permission updates must not tear down the proxy used by concurrent commands.
   // Network rules apply immediately; new commands pick up filesystem rules when wrapped.
-  SandboxManager.updateConfig(buildRuntimeConfig(config, allowances));
+  manager.updateConfig(buildRuntimeConfig(config, allowances));
 }
 
 export function supportsNodeEnvProxy(version: string): boolean {
@@ -210,7 +216,11 @@ function waitForChildProcess(child: ChildProcess): Promise<number | null> {
   });
 }
 
-export function createSandboxedBashOps(shellPath?: string, sshProxy = true): BashOperations {
+export function createSandboxedBashOps(
+  manager: ISandboxManager,
+  shellPath?: string,
+  sshProxy = true,
+): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
       if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
@@ -221,15 +231,12 @@ export function createSandboxedBashOps(shellPath?: string, sshProxy = true): Bas
       // the sandbox network proxy. Install a shell function so ordinary
       // `ssh host` commands use the runtime's local SOCKS proxy too. This is
       // deliberately opt-in at the config layer, but enabled by default.
-      const socksProxyPort = sshProxy ? SandboxManager.getSocksProxyPort() : undefined;
+      const socksProxyPort = sshProxy ? manager.getSocksProxyPort() : undefined;
       const sshProxyCommand =
         process.platform === "darwin" && socksProxyPort !== undefined
           ? `ssh() { /usr/bin/ssh -o 'ProxyCommand=/usr/bin/nc -X 5 -x localhost:${socksProxyPort} %h %p' "$@"; }; `
           : "";
-      const wrappedCommand = await SandboxManager.wrapWithSandbox(
-        `${sshProxyCommand}${command}`,
-        shell,
-      );
+      const wrappedCommand = await manager.wrapWithSandbox(`${sshProxyCommand}${command}`, shell);
 
       const child = spawn(shell, [...args, wrappedCommand], {
         cwd,
@@ -269,7 +276,7 @@ export function createSandboxedBashOps(shellPath?: string, sshProxy = true): Bas
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         signal?.removeEventListener("abort", killProcessGroup);
-        SandboxManager.cleanupAfterCommand();
+        manager.cleanupAfterCommand();
       }
     },
   };

@@ -38,7 +38,7 @@ function createExecTestContext(t: TestContext) {
 
   return {
     cwd,
-    exec: createSandboxedBashOps(undefined, false).exec,
+    exec: createSandboxedBashOps(SandboxManager, undefined, false).exec,
     trackBackgroundProcess: (pidPath: string) => backgroundPidPaths.push(pidPath),
   };
 }
