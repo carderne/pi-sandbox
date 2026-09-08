@@ -1,4 +1,4 @@
-import { SandboxManager } from "@carderne/sandbox-runtime";
+import { createSandboxManager } from "@carderne/sandbox-runtime";
 import { type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
@@ -42,6 +42,7 @@ import {
 } from "./ui.ts";
 
 export default function (pi: ExtensionAPI) {
+  const sandboxManager = createSandboxManager();
   pi.registerFlag("no-sandbox", {
     description: "Disable OS-level sandboxing for bash commands",
     type: "boolean",
@@ -64,7 +65,7 @@ export default function (pi: ExtensionAPI) {
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     try {
-      updateSandboxConfig(loadConfig(cwd), allowances);
+      updateSandboxConfig(sandboxManager, loadConfig(cwd), allowances);
     } catch (error) {
       console.error(`Warning: Failed to update sandbox configuration: ${error}`);
     }
@@ -116,7 +117,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      await initializeSandbox(config, allowances);
+      await initializeSandbox(sandboxManager, config, allowances);
       if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
         process.env.NODE_USE_ENV_PROXY ??= "1";
       }
@@ -145,7 +146,7 @@ export default function (pi: ExtensionAPI) {
 
     if (sandboxInitialized) {
       try {
-        await SandboxManager.reset();
+        await sandboxManager.reset();
       } catch {
         // Ignore cleanup errors.
       }
@@ -174,6 +175,7 @@ export default function (pi: ExtensionAPI) {
         }
         return createBashToolDefinition(localCwd, {
           operations: createSandboxedBashOps(
+            sandboxManager,
             userShellPath,
             loadConfig(ctx.cwd).network?.sshProxy !== false,
           ),
@@ -270,6 +272,7 @@ export default function (pi: ExtensionAPI) {
     }
     return {
       operations: createSandboxedBashOps(
+        sandboxManager,
         userShellPath,
         loadConfig(ctx.cwd).network?.sshProxy !== false,
       ),
@@ -360,7 +363,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     if (!sandboxInitialized) return;
     try {
-      await SandboxManager.reset();
+      await sandboxManager.reset();
     } catch {
       // Ignore cleanup errors.
     }

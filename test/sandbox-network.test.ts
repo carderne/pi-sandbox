@@ -2,7 +2,7 @@ import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 
-import { SandboxManager } from "@carderne/sandbox-runtime";
+import { createSandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
@@ -15,6 +15,7 @@ test(
     timeout: 15_000,
   },
   async (t) => {
+    const manager = createSandboxManager();
     let releaseResponse: (() => void) | undefined;
     let responseStarted: (() => void) | undefined;
     const started = new Promise<void>((resolve) => {
@@ -32,7 +33,7 @@ test(
       releaseResponse?.();
       origin.closeAllConnections();
       origin.close();
-      await SandboxManager.reset();
+      await manager.reset();
     });
     await new Promise<void>((resolve) => origin.listen(0, "127.0.0.1", resolve));
     const originPort = (origin.address() as AddressInfo).port;
@@ -40,10 +41,10 @@ test(
       ...DEFAULT_CONFIG,
       network: { ...DEFAULT_CONFIG.network!, allowedDomains: ["127.0.0.1"] },
     };
-    await initializeSandbox(config);
-    const proxyPort = SandboxManager.getProxyPort();
-    const socksPort = SandboxManager.getSocksProxyPort();
-    const token = SandboxManager.getProxyAuthToken();
+    await initializeSandbox(manager, config);
+    const proxyPort = manager.getProxyPort();
+    const socksPort = manager.getSocksProxyPort();
+    const token = manager.getProxyAuthToken();
     assert.ok(proxyPort);
     assert.ok(socksPort);
 
@@ -79,6 +80,7 @@ test(
     pending.catch(() => {});
     await started;
     updateSandboxConfig(
+      manager,
       { ...config, network: { ...config.network, allowedDomains: ["localhost"] } },
       {
         domains: [],
@@ -86,8 +88,8 @@ test(
         writePaths: [],
       },
     );
-    assert.equal(SandboxManager.getProxyPort(), proxyPort);
-    assert.equal(SandboxManager.getSocksProxyPort(), socksPort);
+    assert.equal(manager.getProxyPort(), proxyPort);
+    assert.equal(manager.getSocksProxyPort(), socksPort);
     assert.equal((await throughProxy("127.0.0.1")).status, 403);
     assert.deepEqual(await throughProxy("localhost"), { status: 200, body: "ok" });
     releaseResponse!();

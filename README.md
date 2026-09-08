@@ -136,7 +136,12 @@ or set it to `0` to wait indefinitely. A timeout never grants permission.
 
 **Session allowances** are held in memory only. They are never written to disk
 and the agent has no way to read or modify them. They are reset when the
-extension reloads or pi restarts.
+extension reloads or pi restarts. Parent agents and subagents have separate
+sandbox managers and session allowances; shutting down one does not affect another.
+
+Saved project or global permission changes are not broadcast to other running
+sessions' sandbox managers. Restart affected sessions to apply grants or revocations
+consistently.
 
 ### What is prompted vs. hard-blocked
 
