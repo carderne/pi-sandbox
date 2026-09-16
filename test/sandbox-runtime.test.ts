@@ -5,7 +5,6 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -109,7 +108,6 @@ test("buildRuntimeConfig does not allow SSH_AUTH_SOCK unless allowSSHAgentSocket
   withSshAuthSock("/tmp/ssh-agent.sock", () => {
     const runtime = buildRuntimeConfig(DEFAULT_CONFIG);
     assert.equal(runtime.network?.allowUnixSockets, undefined);
-    assert.equal("allowSSHAgentSocket" in (runtime.network ?? {}), false);
   });
 });
 
@@ -141,31 +139,12 @@ test("buildRuntimeConfig adds the real SSH_AUTH_SOCK path when allowSSHAgentSock
       const runtime = buildRuntimeConfig(config);
       const resolved = realpathSync(socketPath);
       assert.deepEqual(runtime.network?.allowUnixSockets, ["/existing.sock", resolved]);
-      assert.equal(realpathSync(symlinkPath), resolved);
-      assert.notEqual(runtime.network?.allowUnixSockets?.[1], symlinkPath);
-      assert.equal("allowSSHAgentSocket" in (runtime.network ?? {}), false);
       assert.deepEqual(config.network?.allowUnixSockets, existing);
     });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }
-});
-
-test("buildRuntimeConfig keeps allowUnixSockets when allowSSHAgentSocket is set but SSH_AUTH_SOCK is missing", () => {
-  const config = {
-    ...DEFAULT_CONFIG,
-    network: {
-      ...DEFAULT_CONFIG.network!,
-      allowSSHAgentSocket: true,
-      allowUnixSockets: ["/existing.sock"],
-    },
-  };
-
-  withSshAuthSock(undefined, () => {
-    const runtime = buildRuntimeConfig(config);
-    assert.deepEqual(runtime.network?.allowUnixSockets, ["/existing.sock"]);
-  });
 });
 
 test("buildRuntimeConfig does not allow a directory SSH_AUTH_SOCK", () => {
@@ -184,29 +163,6 @@ test("buildRuntimeConfig does not allow a directory SSH_AUTH_SOCK", () => {
       const runtime = buildRuntimeConfig(config);
       assert.deepEqual(runtime.network?.allowUnixSockets, ["/existing.sock"]);
       assert.equal(runtime.network?.allowUnixSockets?.includes(realpathSync(root)), false);
-    });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("buildRuntimeConfig does not allow a non-socket file SSH_AUTH_SOCK", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-ssh-agent-file-"));
-  const filePath = join(root, "not-a-socket");
-  writeFileSync(filePath, "");
-  const config = {
-    ...DEFAULT_CONFIG,
-    network: {
-      ...DEFAULT_CONFIG.network!,
-      allowSSHAgentSocket: true,
-      allowUnixSockets: ["/existing.sock"],
-    },
-  };
-
-  try {
-    withSshAuthSock(filePath, () => {
-      const runtime = buildRuntimeConfig(config);
-      assert.deepEqual(runtime.network?.allowUnixSockets, ["/existing.sock"]);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

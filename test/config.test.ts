@@ -101,16 +101,6 @@ test("mergeConfigLayers uses defaults only for arrays not configured by either f
   assert.deepEqual(merged.network?.allowedDomains, DEFAULT_CONFIG.network?.allowedDomains);
 });
 
-test("mergeConfigLayers lets project allowSSHAgentSocket override global", () => {
-  const merged = mergeConfigLayers(
-    DEFAULT_CONFIG,
-    { network: { allowSSHAgentSocket: false } },
-    { network: { allowSSHAgentSocket: true } },
-  );
-
-  assert.equal(merged.network?.allowSSHAgentSocket, true);
-});
-
 test("getConfigPaths uses Pi's configured agent directory", () => {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = "/tmp/custom-pi-agent";

@@ -168,14 +168,10 @@ implies read access; paths do not need to be repeated in `allowRead`.
 works with the built-in `nc`. Domain filtering still applies, but another local process
 that discovers the temporary proxy port can use it while the sandbox is running.
 
-`allowSSHAgentSocket` is disabled by default. When enabled, pi-sandbox resolves
-`SSH_AUTH_SOCK` to a real path when the sandbox is built and adds that path to
-`allowUnixSockets` only if it is an existing Unix socket. This is intended for the
-macOS system ssh-agent, whose path changes every boot and whose `/var` location is
-a symlink to `/private/var`. Existing `allowUnixSockets` entries are kept. Prefer
-this over allowing `/private/var/run` or setting `allowAllUnixSockets`. The option
-has no effect when `SSH_AUTH_SOCK` is unset, missing, or not a socket. On Linux,
-this setting alone does not make the SSH agent usable.
+`allowSSHAgentSocket` is disabled by default. When enabled, the current
+`SSH_AUTH_SOCK` is allowed inside the sandbox if it is an existing Unix socket.
+This is for macOS SSH commit signing; on Linux this setting alone does not make
+the agent usable.
 
 > **⚠️ Read and write have different precedence rules:**
 >

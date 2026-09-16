@@ -86,12 +86,10 @@ export function buildRuntimeConfig(
   platform: NodeJS.Platform = process.platform,
 ): SandboxRuntimeConfig {
   const effective = resolveAllowances(config, allowances);
-  const network = { ...config.network };
-  delete network.allowSSHAgentSocket;
 
   return {
     network: {
-      ...network,
+      ...config.network,
       allowedDomains: effective.domains,
       deniedDomains: config.network?.deniedDomains ?? [],
       allowUnixSockets: resolveUnixSockets(config),
