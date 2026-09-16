@@ -29,6 +29,14 @@ export type SandboxConfig = Omit<SandboxRuntimeConfig, "network" | "filesystem">
      * access via the host's routing/DNS/VPN. Opt-in; reduces protection.
      */
     disabled?: boolean;
+    /**
+     * Allow the current SSH agent socket (`SSH_AUTH_SOCK`) inside the sandbox.
+     * Disabled by default. When enabled, the resolved existing socket path is
+     * added to `allowUnixSockets` at sandbox-build time so macOS `/var` →
+     * `/private/var` and the per-boot launchd directory are handled without a
+     * broad allowlist. Non-sockets and unresolved paths are ignored.
+     */
+    allowSSHAgentSocket?: boolean;
   };
 };
 

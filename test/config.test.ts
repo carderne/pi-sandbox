@@ -21,6 +21,7 @@ test("omitted settings use their defaults", () => {
   assert.equal(DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS, 600);
   assert.equal(merged.permissionPromptTimeoutSeconds, DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS);
   assert.equal(merged.sandboxUserShell, true);
+  assert.equal(merged.network?.allowSSHAgentSocket, undefined);
 });
 
 test("mergeConfigLayers combines configured arrays and deduplicates entries", () => {
@@ -98,6 +99,16 @@ test("mergeConfigLayers uses defaults only for arrays not configured by either f
   assert.deepEqual(merged.filesystem?.allowWrite, []);
   assert.deepEqual(merged.filesystem?.allowRead, DEFAULT_CONFIG.filesystem?.allowRead);
   assert.deepEqual(merged.network?.allowedDomains, DEFAULT_CONFIG.network?.allowedDomains);
+});
+
+test("mergeConfigLayers lets project allowSSHAgentSocket override global", () => {
+  const merged = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    { network: { allowSSHAgentSocket: false } },
+    { network: { allowSSHAgentSocket: true } },
+  );
+
+  assert.equal(merged.network?.allowSSHAgentSocket, true);
 });
 
 test("getConfigPaths uses Pi's configured agent directory", () => {
