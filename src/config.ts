@@ -167,10 +167,10 @@ export function getConfigPaths(cwd: string): { globalPath: string; projectPath: 
   };
 }
 
-export function loadConfig(cwd: string): SandboxConfig {
+export function loadConfig(cwd: string, projectTrusted = true): SandboxConfig {
   const { globalPath, projectPath } = getConfigPaths(cwd);
   const globalConfig = readJsonConfig(globalPath, true);
-  const projectConfig = readJsonConfig(projectPath, true);
+  const projectConfig = projectTrusted ? readJsonConfig(projectPath, true) : {};
   return mergeConfigLayers(DEFAULT_CONFIG, globalConfig, projectConfig);
 }
 
