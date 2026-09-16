@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -74,6 +74,23 @@ function session(cwd: string) {
     },
   };
 }
+
+test("bash executes in the session working directory", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-cwd-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const current = session(root);
+  t.after(async () => {
+    await current.shutdown();
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  await current.start();
+
+  assert.equal((await current.bash("pwd")).trim(), realpathSync(root));
+});
 
 test(
   "a subagent shutdown does not stop its parent's bash or user shell",

@@ -20,6 +20,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep socat
       - run: pnpm install --frozen-lockfile
       - run: pnpm run ci:fmt
       - run: pnpm run ci:lint
