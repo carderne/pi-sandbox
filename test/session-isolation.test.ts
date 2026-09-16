@@ -11,19 +11,23 @@ import extension from "../src/extension.ts";
 
 type Handler = (event: any, ctx: ExtensionContext) => any;
 
-function session(cwd: string) {
+function session(cwd: string, initialActiveTools = ["bash"]) {
   const handlers = new Map<string, Handler>();
   let bash: Parameters<ExtensionAPI["registerTool"]>[0] | undefined;
+  let started = false;
+  const activeTools = [...initialActiveTools];
   const errors: string[] = [];
   const api = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     registerTool: (tool: typeof bash) => {
       if (tool?.name === "bash") bash = tool;
+      if (!started && tool?.name && !activeTools.includes(tool.name)) activeTools.push(tool.name);
     },
     registerFlag: () => {},
     registerShortcut: () => {},
     registerCommand: () => {},
     getFlag: () => false,
+    getActiveTools: () => [...activeTools],
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd,
@@ -39,8 +43,12 @@ function session(cwd: string) {
   extension(api);
   return {
     async start() {
+      started = true;
       await handlers.get("session_start")!({ reason: "startup" }, ctx);
       assert.deepEqual(errors, []);
+    },
+    activeTools() {
+      return [...activeTools];
     },
     async shutdown() {
       await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
@@ -74,6 +82,28 @@ function session(cwd: string) {
     },
   };
 }
+
+test("overriding bash preserves an inactive tool state", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-tools-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  mkdirSync(process.env.PI_CODING_AGENT_DIR);
+  writeFileSync(
+    join(process.env.PI_CODING_AGENT_DIR, "sandbox.json"),
+    JSON.stringify({ enabled: false }),
+  );
+  const current = session(root, []);
+  t.after(async () => {
+    await current.shutdown();
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  await current.start();
+
+  assert.deepEqual(current.activeTools(), []);
+});
 
 test(
   "a subagent shutdown does not stop its parent's bash or user shell",
