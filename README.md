@@ -61,7 +61,7 @@ pi install npm:pi-sandbox
 
 #### Configure
 Add a config like this either to Pi's global agent directory (by default, `~/.pi/agent/sandbox.json`; respects `PI_CODING_AGENT_DIR`) or to `.pi/sandbox.json` (local).
-Scalar settings in the local config take precedence over global settings. The
+The local config is loaded only when Pi trusts the project. Scalar settings in the local config take precedence over global settings. The
 path and domain arrays from both files are combined and deduplicated, so a
 project can add permissions without repeating the global configuration. Built-in
 defaults are used for an array only when neither file configures it.

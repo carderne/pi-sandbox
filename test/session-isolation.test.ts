@@ -11,7 +11,7 @@ import extension from "../src/extension.ts";
 
 type Handler = (event: any, ctx: ExtensionContext) => any;
 
-function session(cwd: string) {
+function session(cwd: string, projectTrusted = true) {
   const handlers = new Map<string, Handler>();
   let bash: Parameters<ExtensionAPI["registerTool"]>[0] | undefined;
   const errors: string[] = [];
@@ -28,6 +28,7 @@ function session(cwd: string) {
   const ctx = {
     cwd,
     hasUI: false,
+    isProjectTrusted: () => projectTrusted,
     ui: {
       notify: (message: string, level: string) => {
         if (level === "error") errors.push(message);
@@ -74,6 +75,37 @@ function session(cwd: string) {
     },
   };
 }
+
+test("untrusted project settings cannot select the bash executable", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-trust-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const originalCwd = process.cwd();
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  mkdirSync(process.env.PI_CODING_AGENT_DIR);
+  mkdirSync(join(root, ".pi"));
+  writeFileSync(
+    join(process.env.PI_CODING_AGENT_DIR, "sandbox.json"),
+    JSON.stringify({ enabled: false }),
+  );
+  writeFileSync(
+    join(root, ".pi", "settings.json"),
+    JSON.stringify({ shellPath: join(root, "untrusted-shell") }),
+  );
+  process.chdir(root);
+  const current = session(root, false);
+  process.chdir(originalCwd);
+  t.after(async () => {
+    await current.shutdown();
+    process.chdir(originalCwd);
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  await current.start();
+
+  assert.equal((await current.bash("printf trusted")).trim(), "trusted");
+});
 
 test(
   "a subagent shutdown does not stop its parent's bash or user shell",
