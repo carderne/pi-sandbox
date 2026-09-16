@@ -78,6 +78,7 @@ Note below that the order of precedence for filesystem read and write are opposi
     "allowLocalBinding": true,     // ditto
     "allowAllUnixSockets": true,   // ditto
     "allowUnauthenticatedSocksProxy": true, // Enables Git-over-SSH on macOS
+    "allowSSHAgentSocket": true, // Allow the current SSH agent socket (macOS SSH commit signing)
     "allowedDomains": ["github.com", "*.github.com"],
     "deniedDomains": []
   },
@@ -166,6 +167,15 @@ implies read access; paths do not need to be repeated in `allowRead`.
 `allowUnauthenticatedSocksProxy` is enabled by default on macOS so Git-over-SSH
 works with the built-in `nc`. Domain filtering still applies, but another local process
 that discovers the temporary proxy port can use it while the sandbox is running.
+
+`allowSSHAgentSocket` is disabled by default. When enabled, pi-sandbox resolves
+`SSH_AUTH_SOCK` to a real path when the sandbox is built and adds that path to
+`allowUnixSockets` only if it is an existing Unix socket. This is intended for the
+macOS system ssh-agent, whose path changes every boot and whose `/var` location is
+a symlink to `/private/var`. Existing `allowUnixSockets` entries are kept. Prefer
+this over allowing `/private/var/run` or setting `allowAllUnixSockets`. The option
+has no effect when `SSH_AUTH_SOCK` is unset, missing, or not a socket. On Linux,
+this setting alone does not make the SSH agent usable.
 
 > **⚠️ Read and write have different precedence rules:**
 >

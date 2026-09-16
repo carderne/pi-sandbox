@@ -12,6 +12,14 @@ export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
     allowUnauthenticatedSocksProxy?: boolean;
     /** Route ordinary `ssh` commands through the sandbox SOCKS proxy. */
     sshProxy?: boolean;
+    /**
+     * Allow the current SSH agent socket (`SSH_AUTH_SOCK`) inside the sandbox.
+     * Disabled by default. When enabled, the resolved existing socket path is
+     * added to `allowUnixSockets` at sandbox-build time so macOS `/var` →
+     * `/private/var` and the per-boot launchd directory are handled without a
+     * broad allowlist. Non-sockets and unresolved paths are ignored.
+     */
+    allowSSHAgentSocket?: boolean;
   };
 };
 
