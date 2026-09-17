@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { type SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
   enabled?: boolean;
@@ -163,7 +163,7 @@ function readJsonConfig(configPath: string, warn: boolean): SandboxConfigFile {
 export function getConfigPaths(cwd: string): { globalPath: string; projectPath: string } {
   return {
     globalPath: join(getAgentDir(), "sandbox.json"),
-    projectPath: join(cwd, ".pi", "sandbox.json"),
+    projectPath: join(cwd, CONFIG_DIR_NAME, "sandbox.json"),
   };
 }
 
