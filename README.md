@@ -78,6 +78,7 @@ Note below that the order of precedence for filesystem read and write are opposi
     "allowLocalBinding": true,     // ditto
     "allowAllUnixSockets": true,   // ditto
     "allowUnauthenticatedSocksProxy": true, // Enables Git-over-SSH on macOS
+    "allowSSHAgentSocket": true, // Allow the current SSH agent socket (macOS SSH commit signing)
     "allowedDomains": ["github.com", "*.github.com"],
     "deniedDomains": []
   },
@@ -166,6 +167,11 @@ implies read access; paths do not need to be repeated in `allowRead`.
 `allowUnauthenticatedSocksProxy` is enabled by default on macOS so Git-over-SSH
 works with the built-in `nc`. Domain filtering still applies, but another local process
 that discovers the temporary proxy port can use it while the sandbox is running.
+
+`allowSSHAgentSocket` is disabled by default. When enabled, the current
+`SSH_AUTH_SOCK` is allowed inside the sandbox if it is an existing Unix socket.
+This is for macOS SSH commit signing; on Linux this setting alone does not make
+the agent usable.
 
 > **⚠️ Read and write have different precedence rules:**
 >

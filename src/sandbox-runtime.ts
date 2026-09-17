@@ -1,7 +1,7 @@
 import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -23,6 +23,26 @@ export interface EffectiveAllowances {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function resolveSshAgentSocketPath(sshAuthSock: string | undefined): string | undefined {
+  if (!sshAuthSock) return undefined;
+  try {
+    const resolved = realpathSync(sshAuthSock);
+    return statSync(resolved).isSocket() ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveUnixSockets(config: SandboxConfig): string[] | undefined {
+  const sockets = [...(config.network?.allowUnixSockets ?? [])];
+  if (config.network?.allowSSHAgentSocket) {
+    const agentSocket = resolveSshAgentSocketPath(process.env.SSH_AUTH_SOCK);
+    if (agentSocket) sockets.push(agentSocket);
+  }
+  if (sockets.length === 0) return config.network?.allowUnixSockets;
+  return unique(sockets);
 }
 
 const canonicalizeFilesystemPattern = (path: string) =>
@@ -72,6 +92,7 @@ export function buildRuntimeConfig(
       ...config.network,
       allowedDomains: effective.domains,
       deniedDomains: config.network?.deniedDomains ?? [],
+      allowUnixSockets: resolveUnixSockets(config),
     },
     filesystem: {
       disabled: config.filesystem?.disabled,

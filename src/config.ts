@@ -12,6 +12,7 @@ export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
     allowUnauthenticatedSocksProxy?: boolean;
     /** Route ordinary `ssh` commands through the sandbox SOCKS proxy. */
     sshProxy?: boolean;
+    allowSSHAgentSocket?: boolean;
   };
 };
 
