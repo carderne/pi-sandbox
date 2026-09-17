@@ -63,21 +63,31 @@ function expandPath(filePath: string): string {
   return resolve(filePath.replace(/^~(?=$|\/)/, homedir()));
 }
 
+function ancestorWalk(absolutePath: string): { ancestor: string; tail: string[] } {
+  const tail: string[] = [];
+  let probe = absolutePath;
+  while (!existsSync(probe)) {
+    const parent = dirname(probe);
+    if (parent === probe) return { ancestor: probe, tail };
+    tail.unshift(basename(probe));
+    probe = parent;
+  }
+  return { ancestor: probe, tail };
+}
+
+/** Deepest existing ancestor of a path; "/" when nothing along it exists. */
+export function deepestExistingAncestor(filePath: string): string {
+  return ancestorWalk(filePath).ancestor;
+}
+
 export function canonicalizePath(filePath: string): string {
   const absolutePath = expandPath(filePath);
   try {
     return realpathSync.native(absolutePath);
   } catch {
-    const tail: string[] = [];
-    let probe = absolutePath;
-    while (!existsSync(probe)) {
-      const parent = dirname(probe);
-      if (parent === probe) return absolutePath;
-      tail.unshift(basename(probe));
-      probe = parent;
-    }
+    const { ancestor, tail } = ancestorWalk(absolutePath);
     try {
-      return resolve(realpathSync.native(probe), ...tail);
+      return resolve(realpathSync.native(ancestor), ...tail);
     } catch {
       return absolutePath;
     }

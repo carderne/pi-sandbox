@@ -335,11 +335,16 @@ export function promptWriteBlock(
   ctx: ExtensionContext,
   path: string,
   timeoutSeconds?: number,
+  blockedPath?: string,
 ): Promise<PermissionPromptResult> {
+  const widening =
+    blockedPath && blockedPath !== path
+      ? ` (write was blocked on "${blockedPath}" — access is granted on its parent "${path}" because the file itself does not exist yet)`
+      : "";
   return showPermissionPrompt(
     pi,
     ctx,
-    `📝 Write blocked: "${path}" is not in allowWrite`,
+    `📝 Write blocked: "${path}" is not in allowWrite${widening}`,
     path,
     (value) => validRule(value, matchesPattern(path, [value]), `path "${path}"`),
     timeoutSeconds,
