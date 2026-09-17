@@ -76,6 +76,43 @@ function session(cwd: string) {
 }
 
 test(
+  "sandboxed bash respects shellCommandPrefix",
+  {
+    skip: process.platform !== "darwin",
+    timeout: 15_000,
+  },
+  async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-prefix-"));
+    const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    const prefixPath = join(root, "prefix.sh");
+    writeFileSync(prefixPath, 'export PI_SANDBOX_PREFIX_TEST="prefix-ran"\n');
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "settings.json"),
+      JSON.stringify({ shellCommandPrefix: `source ${JSON.stringify(prefixPath)}` }),
+    );
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "sandbox.json"),
+      JSON.stringify({
+        enabled: true,
+        network: { allowedDomains: ["localhost"], deniedDomains: [] },
+        filesystem: { denyRead: [], allowRead: [], allowWrite: [root], denyWrite: [] },
+      }),
+    );
+    const current = session(root);
+    t.after(async () => {
+      await current.shutdown();
+      if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    });
+    await current.start();
+    assert.equal(await current.bash(`printf '%s' "$PI_SANDBOX_PREFIX_TEST"`), "prefix-ran");
+  },
+);
+
+test(
   "a subagent shutdown does not stop its parent's bash or user shell",
   {
     skip: process.platform !== "darwin",

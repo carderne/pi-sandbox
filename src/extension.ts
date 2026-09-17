@@ -50,8 +50,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   const localCwd = process.cwd();
-  const userShellPath = SettingsManager.create(localCwd).getShellPath();
-  const localBash = createBashToolDefinition(localCwd, { shellPath: userShellPath });
+  const settings = SettingsManager.create(localCwd);
+  const userShellPath = settings.getShellPath();
+  const shellCommandPrefix = settings.getShellCommandPrefix();
+  const localBash = createBashToolDefinition(localCwd, {
+    commandPrefix: shellCommandPrefix,
+    shellPath: userShellPath,
+  });
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
@@ -179,6 +184,7 @@ export default function (pi: ExtensionAPI) {
             userShellPath,
             loadConfig(ctx.cwd).network?.sshProxy !== false,
           ),
+          commandPrefix: shellCommandPrefix,
           shellPath: userShellPath,
         }).execute(id, params, signal, onUpdate, ctx);
       };
