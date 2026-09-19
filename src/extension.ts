@@ -16,15 +16,20 @@ import {
 } from "./config.ts";
 import {
   canonicalizePath,
+  deepestExistingAncestor,
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
   resolveWritePermission,
 } from "./policy.ts";
 import {
+  blockedWriteIsFromGit,
   createSandboxedBashOps,
+  effectiveCommandCwd,
   extractBlockedWritePath,
+  SANDBOX_WRITE_DENY_RE,
   initializeSandbox,
+  resolveBlockedPath,
   updateSandboxConfig,
   resolveAllowances,
   type SessionAllowances,
@@ -193,7 +198,12 @@ export default function (pi: ExtensionAPI) {
       try {
         result = await runBash();
       } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes("Operation not permitted")) {
+        if (
+          !sandboxEnabled ||
+          !sandboxInitialized ||
+          !(error instanceof Error) ||
+          !SANDBOX_WRITE_DENY_RE.test(error.message)
+        ) {
           throw error;
         }
         result = {
@@ -215,14 +225,39 @@ export default function (pi: ExtensionAPI) {
         const blockedPath = extractBlockedWritePath(output);
 
         if (blockedPath) {
-          const path = canonicalizePath(blockedPath);
+          const commandCwd = effectiveCommandCwd(
+            params.command,
+            localCwd,
+            blockedWriteIsFromGit(output),
+          );
+          const blockedAbsolute = resolveBlockedPath(blockedPath, commandCwd);
+          const blockedCanonical = canonicalizePath(blockedAbsolute);
+          const grantPath = deepestExistingAncestor(blockedCanonical);
+          if (grantPath === "/") {
+            ctx.ui.notify(
+              `Sandbox: cannot grant write access for "${blockedCanonical}" — no safe ancestor below "/".`,
+              "warning",
+            );
+            return result;
+          }
           const config = loadConfig(ctx.cwd);
+          const denyWrite = config.filesystem?.denyWrite ?? [];
+          if (matchesPattern(blockedCanonical, denyWrite)) {
+            ctx.ui.notify(`Sandbox: write to "${blockedCanonical}" is in denyWrite.`, "warning");
+            return result;
+          }
           const writePermission = await resolveWritePermission({
-            path,
+            path: grantPath,
             allowWrite: effectiveWritePaths(ctx.cwd),
-            denyWrite: config.filesystem?.denyWrite ?? [],
+            denyWrite,
             prompt: (path) =>
-              promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
+              promptWriteBlock(
+                pi,
+                ctx,
+                path,
+                config.permissionPromptTimeoutSeconds,
+                blockedCanonical,
+              ),
             saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
           });
           if (writePermission.action === "deny") {
