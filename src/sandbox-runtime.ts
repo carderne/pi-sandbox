@@ -82,7 +82,10 @@ export function buildRuntimeConfig(
       ]),
       allowWrite: canonicalizeFilesystemPatterns(effective.writePaths),
       denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? []),
-    },
+      // Forwarded for @carderne/sandbox-runtime PR #21. The cast is only
+      // needed until a released runtime type carries the field.
+      denyMandatoryCwdFiles: config.filesystem?.denyMandatoryCwdFiles,
+    } as SandboxRuntimeConfig["filesystem"],
     ignoreViolations: config.ignoreViolations,
     enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
     allowBrowserProcess: config.allowBrowserProcess,
