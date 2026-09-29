@@ -1,4 +1,4 @@
-import { createSandboxManager } from "@carderne/sandbox-runtime";
+import { createSandboxManager, type ISandboxManager } from "@carderne/sandbox-runtime";
 import { type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
@@ -42,7 +42,11 @@ import {
 } from "./ui.ts";
 
 export default function (pi: ExtensionAPI) {
-  const sandboxManager = createSandboxManager();
+  registerSandboxExtension(pi, createSandboxManager());
+}
+
+/** The manager is injectable so failure behavior can be tested without host changes. */
+export function registerSandboxExtension(pi: ExtensionAPI, sandboxManager: ISandboxManager) {
   pi.registerFlag("no-sandbox", {
     description: "Disable OS-level sandboxing for bash commands",
     type: "boolean",
@@ -60,6 +64,12 @@ export default function (pi: ExtensionAPI) {
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
+  // Local execution is allowed only after an explicit opt-out, never because
+  // initialization failed (or has not finished yet).
+  let sandboxRequired = true;
+  let sandboxFailure = "Sandbox has not initialized";
+  const unavailableMessage = () =>
+    `Sandbox unavailable: ${sandboxFailure}. Bash is blocked; use /sandbox-enable to retry.`;
   const allowances: SessionAllowances = { domains: [], readPaths: [], writePaths: [] };
 
   const effectiveAllowances = (cwd: string) => resolveAllowances(loadConfig(cwd), allowances);
@@ -114,10 +124,13 @@ export default function (pi: ExtensionAPI) {
       return false;
     }
 
+    sandboxRequired = true;
+    sandboxFailure = "Sandbox initialization is in progress";
     const config = loadConfig(ctx.cwd);
     const platform = process.platform;
     if (platform !== "darwin" && platform !== "linux") {
-      ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
+      sandboxFailure = `Sandbox not supported on ${platform}`;
+      ctx.ui.notify(unavailableMessage(), "error");
       return false;
     }
 
@@ -133,10 +146,14 @@ export default function (pi: ExtensionAPI) {
       return true;
     } catch (error) {
       sandboxEnabled = false;
-      ctx.ui.notify(
-        `Sandbox initialization failed: ${error instanceof Error ? error.message : error}`,
-        "error",
-      );
+      sandboxInitialized = false;
+      sandboxFailure = `Sandbox initialization failed: ${error instanceof Error ? error.message : error}`;
+      try {
+        await sandboxManager.reset();
+      } catch {
+        // Cleanup failure must not turn a failed initialization into an opt-out.
+      }
+      ctx.ui.notify(unavailableMessage(), "error");
       return false;
     }
   }
@@ -144,7 +161,7 @@ export default function (pi: ExtensionAPI) {
   async function disableSandbox(
     ctx: Parameters<typeof warnIfAllDomainsAllowed>[0],
   ): Promise<boolean> {
-    if (!sandboxEnabled) {
+    if (!sandboxRequired) {
       ctx.ui.notify("Sandbox is already disabled", "info");
       return false;
     }
@@ -158,6 +175,7 @@ export default function (pi: ExtensionAPI) {
     }
     sandboxEnabled = false;
     sandboxInitialized = false;
+    sandboxRequired = false;
     ctx.ui.setStatus("sandbox", "");
     return true;
   }
@@ -175,6 +193,9 @@ export default function (pi: ExtensionAPI) {
     label: "bash (sandboxed)",
     async execute(id, params, signal, onUpdate, ctx) {
       const runBash = () => {
+        if (sandboxRequired && (!sandboxEnabled || !sandboxInitialized)) {
+          throw new Error(unavailableMessage());
+        }
         if (!sandboxEnabled || !sandboxInitialized) {
           return localBash.execute(id, params, signal, onUpdate, ctx);
         }
@@ -251,6 +272,16 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("user_bash", async (event, ctx) => {
+    if (sandboxRequired && (!sandboxEnabled || !sandboxInitialized)) {
+      return {
+        result: {
+          output: unavailableMessage(),
+          exitCode: 1,
+          cancelled: false,
+          truncated: false,
+        },
+      };
+    }
     if (!sandboxEnabled || !sandboxInitialized) return;
 
     const config = loadConfig(ctx.cwd);
@@ -354,11 +385,13 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     if (pi.getFlag("no-sandbox") as boolean) {
+      sandboxRequired = false;
       sandboxEnabled = false;
       ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
       return;
     }
     if (!loadConfig(ctx.cwd).enabled) {
+      sandboxRequired = false;
       sandboxEnabled = false;
       ctx.ui.notify("Sandbox disabled via config", "info");
       return;
@@ -436,7 +469,7 @@ export default function (pi: ExtensionAPI) {
     description: "Show sandbox configuration",
     handler: async (_args, ctx) => {
       if (!sandboxEnabled) {
-        ctx.ui.notify("Sandbox is disabled", "info");
+        ctx.ui.notify(sandboxRequired ? unavailableMessage() : "Sandbox is disabled", "info");
         return;
       }
       ctx.ui.notify(
