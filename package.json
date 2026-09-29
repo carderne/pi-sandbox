@@ -32,6 +32,7 @@
     "lint": "oxlint index.ts src test",
     "check": "tsc --noEmit",
     "test": "tsx --test test/**/*.test.ts",
+    "test:linux-launcher": "PI_SANDBOX_NATIVE_TEST=1 tsx --test test/linux-launcher.test.ts",
     "all": "pnpm run fmt && pnpm run lint && pnpm run check && pnpm test",
     "ci:fmt": "oxfmt --check index.ts src test",
     "ci:lint": "pnpm run lint",

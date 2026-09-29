@@ -180,7 +180,16 @@ If neither file configures an array, its built-in defaults apply (see above for
 the defaults). Once an array is configured, only its combined global and local
 entries are used, so an explicit empty array disables that default.
 
-The footer shows a lock indicator while the sandbox is active.
+The footer shows a lock indicator while the sandbox is active. If requested sandbox
+initialization fails, Bash and `!` commands are blocked rather than run locally.
+Use `/sandbox-enable` to retry after resolving the error. Explicit sandbox opt-outs
+retain their existing behavior.
+
+For the in-progress Ubuntu Linux repair and native test instructions, see
+[the repair plan](docs/linux-sandbox-repair.md) and
+[the experimental supervisor](vendor/linux-launcher/README.md). The supervisor is
+not yet connected to the runtime; it does not currently fix the production
+`apply-seccomp` failure.
 
 ## Ackowledgements
 Based on code from

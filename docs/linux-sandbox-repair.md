@@ -94,6 +94,18 @@ relay failures; signals/timeouts/reaping; missing helper and initialization
 failure. Use positive controls. Test permissive-Yama hosts separately in CI,
 not by changing this host's sysctls. Never probe real credential services.
 
+## Implementation progress
+
+- Investigation committed as `5694dc6` on `fix/linux-capability-free-sandbox`.
+- Requested initialization failures now block Bash/user_bash, including calls
+  before startup finishes. Explicit opt-outs and successful retries are tested.
+- `vendor/linux-launcher/launcher.c` implements a capability-free PID 1 and
+  hardened workload filter. The opt-in native suite passes on the affected
+  x86_64 Ubuntu host without host changes.
+- Native relays, runtime vendoring/wiring, network allowlist integration tests,
+  ARM64 validation, and release packaging remain outstanding. The native
+  foundation is deliberately not selected by production code yet.
+
 ## Upstream references
 
 - https://github.com/anthropics/sandbox-runtime/issues/429 — matching AppArmor failure;
