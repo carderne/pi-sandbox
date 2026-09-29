@@ -9,9 +9,8 @@ import { spawnSync } from 'node:child_process'
  */
 export function whichSync(bin: string): string | null {
   // Check if we're running in Bun
-  if (typeof globalThis.Bun !== 'undefined') {
-    return globalThis.Bun.which(bin)
-  }
+  const bun = (globalThis as typeof globalThis & { Bun?: { which(name: string): string | null } }).Bun
+  if (bun) return bun.which(bin)
 
   // Fallback to Node.js implementation
   const result = spawnSync('which', [bin], {

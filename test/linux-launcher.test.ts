@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 // Explicit opt-in: missing native build/test tools must FAIL this suite, not
 // silently skip its security assertions on a release/integration runner.
 test(
-  "capability-free Linux supervisor foundation",
+  "capability-free Linux supervisor",
   {
     skip: process.env.PI_SANDBOX_NATIVE_TEST !== "1",
     timeout: 30_000,
@@ -93,6 +93,39 @@ test(
       const result = spawnSync(binary, ["--", "/bin/true"], { encoding: "utf8" });
       assert.equal(result.status, 125);
       assert.match(result.stderr, /requires Bubblewrap --as-pid-1/);
+    });
+    await t.test("missing, non-socket and dead bridges refuse to start the workload", () => {
+      const dead = join(work, "dead.sock");
+      const bind = spawnSync(
+        "python3",
+        [
+          "-c",
+          "import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()",
+          dead,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(bind.status, 0, bind.stderr);
+      for (const socket of [join(work, "missing.sock"), secret, dead]) {
+        const result = spawnSync(
+          "bwrap",
+          [
+            ...args,
+            "--",
+            binary,
+            "--http-socket",
+            socket,
+            "--socks-socket",
+            socket,
+            "--",
+            "/bin/echo",
+            "MUST NOT RUN",
+          ],
+          { encoding: "utf8", timeout: 5_000 },
+        );
+        assert.equal(result.status, 125, result.stderr);
+        assert.equal(result.stdout, "");
+      }
     });
     await t.test("Bash, pipelines, process substitution, fork and exit status work", () => {
       assert.equal(succeeds("/bin/bash", "-c", "cat <(printf hello) | tr a-z A-Z"), "HELLO");

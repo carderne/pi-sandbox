@@ -4,7 +4,7 @@ Sandbox for [pi](https://pi.dev/).
 
 Sandboxes pi like this:
 - read/write/edit: direct control using allow/deny lists
-- bash: uses [`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime) to control network and file system access
+- bash: uses a [controlled source vendor of sandbox-runtime](vendor/sandbox-runtime/README.md) to control network and filesystem access
 
 When a blocked action is attempted, the user is
 prompted to allow it temporarily or permanently rather than silently failing.
@@ -22,11 +22,12 @@ You may need to trial and error to find additional things you need to allow.
 
 #### Prerequisites
 
-`pi-sandbox` delegates the OS-level bash sandbox to
-[`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime),
-published from the fork at <https://github.com/carderne/sandbox-runtime>,
-which is forked from Anthropic's
-[`anthropic-experimental/sandbox-runtime`](https://github.com/anthropic-experimental/sandbox-runtime).
+This fork vendors `@carderne/sandbox-runtime` 0.0.72 from
+<https://github.com/carderne/sandbox-runtime>, originally derived from
+<https://github.com/anthropics/sandbox-runtime>. Linux uses Bubblewrap and the
+fork's capability-free native supervisor instead of nested `apply-seccomp`.
+Bubblewrap, socat (host bridges), gcc/static libc (local build), and Linux >=5.9
+are required. No Ubuntu/AppArmor/sysctl/capability changes are part of this fix.
 The sandbox runtime checks for [`ripgrep`](https://github.com/BurntSushi/ripgrep) (the
 `rg` binary) on **both macOS and Linux** at sandbox-init time. If `rg`
 is not on the `PATH` that pi was launched with, sandbox initialization
@@ -54,10 +55,28 @@ inherit a minimal non-login `PATH`). On macOS, `/opt/homebrew/bin` and
 `/usr/local/bin` are the usual culprits — make sure your launcher's
 environment includes whichever one your install uses.
 
-#### Install
+#### Build and load this fork
+
 ```bash
-pi install npm:pi-sandbox
+cd ~/projects/personal/pi-sandbox-fix
+corepack pnpm install --frozen-lockfile
+corepack pnpm build:sandbox
 ```
+
+Load this checkout's `index.ts` as the extension (not `npm:pi-sandbox`, which
+loads the upstream package). If your session already points to this checkout,
+use `/reload` or restart Pi after updating and rebuilding. Do not load both
+copies of the sandbox extension.
+
+The generated native binary is local and Git-ignored. Rebuild after changes to
+`vendor/linux-launcher`. Missing or stale artifacts fail closed with build
+instructions. Keep `network.allowAllUnixSockets=false` and
+`enableWeakerNestedSandbox=false` for the hardened Linux path.
+
+Run `corepack pnpm test:linux-launcher` and
+`corepack pnpm test:linux-integration` for native/real-proxy regression tests.
+This folder-loaded fork is validated on the affected x86_64 Ubuntu host; ARM64
+and multi-platform npm release packaging require separate validation.
 
 #### Configure
 Add a config like this either to Pi's global agent directory (by default, `~/.pi/agent/sandbox.json`; respects `PI_CODING_AGENT_DIR`) or to `.pi/sandbox.json` (local).
@@ -185,11 +204,11 @@ initialization fails, Bash and `!` commands are blocked rather than run locally.
 Use `/sandbox-enable` to retry after resolving the error. Explicit sandbox opt-outs
 retain their existing behavior.
 
-For the in-progress Ubuntu Linux repair and native test instructions, see
-[the repair plan](docs/linux-sandbox-repair.md) and
-[the experimental supervisor](vendor/linux-launcher/README.md). The supervisor is
-not yet connected to the runtime; it does not currently fix the production
-`apply-seccomp` failure.
+For the Ubuntu Linux repair, security boundaries, and validation limits, see
+[the repair record](docs/linux-sandbox-repair.md) and
+[the native supervisor](vendor/linux-launcher/README.md). The capability-free
+path is active when Unix sockets are restricted; it retains filesystem and
+network allowlisting without nested namespace setup.
 
 ## Ackowledgements
 Based on code from

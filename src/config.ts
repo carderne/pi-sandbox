@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { type SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+
+import { type SandboxRuntimeConfig } from "./runtime.ts";
 
 export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
   enabled?: boolean;

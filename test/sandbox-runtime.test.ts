@@ -4,11 +4,11 @@ import { join } from "node:path";
 import test, { mock, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { SandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
+import { SandboxManager } from "../src/runtime.ts";
 import {
   buildRuntimeConfig,
   createSandboxedBashOps,
@@ -104,7 +104,7 @@ test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
 
 test("buildRuntimeConfig exposes the bundled seccomp helper on Linux", () => {
   const runtime = buildRuntimeConfig(DEFAULT_CONFIG, undefined, "linux");
-  const runtimeEntryUrl = import.meta.resolve("@carderne/sandbox-runtime");
+  const runtimeEntryUrl = import.meta.resolve("../vendor/sandbox-runtime/src/index.ts");
   const seccompPath = canonicalizePath(
     fileURLToPath(new URL("../vendor/seccomp", runtimeEntryUrl)),
   );
@@ -215,4 +215,33 @@ test("exec rejects when an in-flight command is aborted", async (t) => {
     exec("sleep 5", cwd, { onData: () => {}, signal: controller.signal }),
     new Error("aborted"),
   );
+});
+
+test("exec never starts a command if cancellation precedes or occurs during wrapping", async (t) => {
+  const { cwd, exec } = createExecTestContext(t);
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  let wraps = 0;
+  let cleanups = 0;
+  const duringWrap = new AbortController();
+  mock.method(SandboxManager, "wrapWithSandbox", async (command: string) => {
+    wraps++;
+    duringWrap.abort();
+    return command;
+  });
+  mock.method(SandboxManager, "cleanupAfterCommand", () => {
+    cleanups++;
+  });
+  await assert.rejects(
+    exec("exit 0", cwd, { signal: alreadyAborted.signal, onData: () => {} }),
+    /aborted/,
+  );
+  assert.equal(wraps, 0);
+  assert.equal(cleanups, 0);
+  await assert.rejects(
+    exec("exit 0", cwd, { signal: duringWrap.signal, onData: () => {} }),
+    /aborted/,
+  );
+  assert.equal(wraps, 1);
+  assert.equal(cleanups, 1, "release the completed wrapper without spawning the cancelled command");
 });

@@ -1,4 +1,3 @@
-import type { ISandboxManager } from "@carderne/sandbox-runtime";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -7,6 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import assert from "node:assert/strict";
+
+import type { ISandboxManager } from "../src/runtime.ts";
 
 import { registerSandboxExtension } from "../src/extension.ts";
 

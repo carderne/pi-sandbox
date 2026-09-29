@@ -2,10 +2,10 @@ import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 
-import { createSandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
+import { createSandboxManager } from "../src/runtime.ts";
 import { initializeSandbox, updateSandboxConfig } from "../src/sandbox-runtime.ts";
 
 test(

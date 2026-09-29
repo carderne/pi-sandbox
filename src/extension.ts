@@ -1,4 +1,3 @@
-import { createSandboxManager, type ISandboxManager } from "@carderne/sandbox-runtime";
 import { type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
@@ -21,6 +20,7 @@ import {
   matchesPattern,
   resolveWritePermission,
 } from "./policy.ts";
+import { createSandboxManager, type ISandboxManager } from "./runtime.ts";
 import {
   createSandboxedBashOps,
   extractBlockedWritePath,

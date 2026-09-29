@@ -13,7 +13,6 @@ import {
   normalizePathForSandbox,
   normalizeCaseForComparison,
   isSymlinkOutsideBoundary,
-  encodeSandboxedCommand,
   DANGEROUS_FILES,
   getDangerousDirectories,
 } from './sandbox-utils.js'
@@ -21,7 +20,7 @@ import type {
   FsReadRestrictionConfig,
   FsWriteRestrictionConfig,
 } from './sandbox-schemas.js'
-import { getApplySeccompBinaryPath } from './generate-seccomp-filter.js'
+import { getLinuxLauncherPath, requireLinuxLauncher } from './linux-launcher.js'
 import type { SeccompConfig } from './sandbox-config.js'
 
 export interface LinuxNetworkBridgeContext {
@@ -66,16 +65,13 @@ export interface LinuxSandboxParams {
   ripgrepConfig?: { command: string; args?: string[] }
   /** Maximum directory depth to search for dangerous files (default: 3) */
   mandatoryDenySearchDepth?: number
-  /** Custom seccomp binary paths */
+  /** Upstream compatibility field; custom helpers are rejected in this fork. */
   seccompConfig?: SeccompConfig
   /** Absolute path to the bwrap binary (default: resolve "bwrap" via PATH) */
   bwrapPath?: string
   /** Absolute path to the socat binary (default: resolve "socat" via PATH) */
   socatPath?: string
-  /** Filesystem unix socket bound by the Linux violation monitor. When set,
-   *  the socket is bind-mounted into the sandbox and apply-seccomp is told
-   *  (via SRT_OBSERVE_SOCK) to install a USER_NOTIF observation filter and
-   *  stream observed write-intent paths over that socket as newline JSON. */
+  /** Upstream observation transport. Explicitly unsupported by the native launcher. */
   observeSocketPath?: string
   /** Abort signal to cancel the ripgrep scan */
   abortSignal?: AbortSignal
@@ -474,15 +470,11 @@ function isExecutable(p: string): boolean {
 export function getLinuxDependencyStatus(
   opts?: LinuxDependencyOptions,
 ): LinuxDependencyStatus {
-  const { seccompConfig, bwrapPath, socatPath } = opts ?? {}
-  // argv0 mode: apply-seccomp is compiled into the caller's binary — skip
-  // the on-disk lookup and trust that applyPath resolves inside bwrap.
+  const { bwrapPath, socatPath } = opts ?? {}
   return {
     hasBwrap: bwrapPath ? isExecutable(bwrapPath) : whichSync('bwrap') !== null,
     hasSocat: socatPath ? isExecutable(socatPath) : whichSync('socat') !== null,
-    hasSeccompApply: seccompConfig?.argv0
-      ? true
-      : getApplySeccompBinaryPath(seccompConfig?.applyPath) !== null,
+    hasSeccompApply: getLinuxLauncherPath() !== null,
   }
 }
 
@@ -512,11 +504,11 @@ export function checkLinuxDependencies(
     errors.push('socat not installed')
   }
 
-  if (
-    !seccompConfig?.argv0 &&
-    getApplySeccompBinaryPath(seccompConfig?.applyPath) === null
-  ) {
-    warnings.push('seccomp not available - unix socket access not restricted')
+  if (seccompConfig?.applyPath || seccompConfig?.argv0) {
+    errors.push('Custom seccomp helpers are unsupported by the capability-free launcher')
+  }
+  if (getLinuxLauncherPath() === null) {
+    errors.push('Capability-free sandbox launcher missing or stale: run `corepack pnpm build:sandbox` in pi-sandbox-fix')
   }
 
   return { warnings, errors }
@@ -702,31 +694,6 @@ export async function initializeLinuxNetworkBridge(
 }
 
 /**
- * Resolve how to invoke apply-seccomp: either a standalone binary path, or a
- * multicall-binary prefix that dispatches on the ARGV0 env var.
- *
- * Returns a shell-ready string ending in a trailing space — callers append
- * quote([shell, '-c', cmd]). Returns undefined when seccomp is
- * unavailable (no argv0, no binary found).
- *
- * When argv0 is set, applyPath is used verbatim (no existence check); the
- * caller is responsible for ensuring it resolves inside the bwrap namespace.
- */
-function resolveApplySeccompPrefix(
-  applyPath: string | undefined,
-  argv0: string | undefined,
-): string | undefined {
-  if (argv0) {
-    if (!applyPath) {
-      throw new Error('seccompConfig.argv0 requires seccompConfig.applyPath')
-    }
-    return `ARGV0=${quote([argv0])} ${quote([applyPath])} `
-  }
-  const binary = getApplySeccompBinaryPath(applyPath)
-  return binary ? `${quote([binary])} ` : undefined
-}
-
-/**
  * Build the command that runs inside the sandbox.
  * Sets up HTTP proxy on port 3128 and SOCKS proxy on port 1080
  */
@@ -734,7 +701,6 @@ function buildSandboxCommand(
   httpSocketPath: string,
   socksSocketPath: string,
   userCommand: string,
-  applySeccompPrefix: string | undefined,
   shell?: string,
   socatPath?: string,
 ): string {
@@ -749,18 +715,9 @@ function buildSandboxCommand(
     'trap "kill %1 %2 2>/dev/null; exit" EXIT',
   ]
 
-  // apply-seccomp runs after socat so socat can still create Unix sockets.
-  if (applySeccompPrefix) {
-    const applySeccompCmd =
-      applySeccompPrefix + quote([shellPath, '-c', userCommand])
-    const innerScript = [...socatCommands, applySeccompCmd].join('\n')
-    return `${shellPath} -c ${quote([innerScript])}`
-  } else {
-    const innerScript = [...socatCommands, `eval ${quote([userCommand])}`].join(
-      '\n',
-    )
-    return `${shellPath} -c ${quote([innerScript])}`
-  }
+  // Legacy path ONLY for an explicit allowAllUnixSockets=true opt-out.
+  const innerScript = [...socatCommands, `eval ${quote([userCommand])}`].join('\n')
+  return `${shellPath} -c ${quote([innerScript])}`
 }
 
 /**
@@ -1306,50 +1263,12 @@ async function generateFilesystemArgs(
 /**
  * Wrap a command with sandbox restrictions on Linux
  *
- * UNIX SOCKET BLOCKING (APPLY-SECCOMP):
- * This implementation uses a custom apply-seccomp binary to block Unix domain socket
- * creation for user commands while allowing network infrastructure:
- *
- * Stage 1: Outer bwrap - Network and filesystem isolation (NO seccomp)
- *   - Bubblewrap starts with isolated network namespace (--unshare-net)
- *   - Bubblewrap applies PID namespace isolation (--unshare-pid and --proc)
- *   - Filesystem restrictions are applied (read-only mounts, bind mounts, etc.)
- *   - Socat processes start and connect to Unix socket bridges (can use socket(AF_UNIX, ...))
- *
- * Stage 2: apply-seccomp - Nested PID namespace + seccomp filter
- *   - apply-seccomp creates a nested user+PID+mount namespace and remounts /proc
- *   - Inside, apply-seccomp becomes PID 1 (non-dumpable init/reaper)
- *   - Forks, sets PR_SET_NO_NEW_PRIVS, applies seccomp via prctl(PR_SET_SECCOMP)
- *   - Execs user command with seccomp active (cannot create new Unix sockets)
- *   - User command cannot see or ptrace bwrap/bash/socat (separate PID namespace)
- *
- * This solves the conflict between:
- * - Security: Blocking arbitrary Unix socket creation in user commands
- * - Functionality: Network sandboxing requires socat to call socket(AF_UNIX, ...) for bridge connections
- *
- * The seccomp-bpf filter blocks socket(AF_UNIX, ...) syscalls, preventing:
- * - Creating new Unix domain socket file descriptors
- *
- * Security limitations:
- * - Does NOT block operations (bind, connect, sendto, etc.) on inherited Unix socket FDs
- * - Does NOT prevent passing Unix socket FDs via SCM_RIGHTS
- * - For most sandboxing use cases, blocking socket creation is sufficient
- *
- * The filter allows:
- * - All TCP/UDP sockets (AF_INET, AF_INET6) for normal network operations
- * - All other syscalls
- *
- * PLATFORM NOTE:
- * The allowUnixSockets configuration is not path-based on Linux (unlike macOS)
- * because seccomp-bpf cannot inspect user-space memory to read socket paths.
- *
- * Requirements for seccomp filtering:
- * - Pre-built apply-seccomp binaries are included for x64 and ARM64
- * - Pre-generated BPF filters are included for x64 and ARM64
- * - Other architectures are not currently supported (no apply-seccomp binary available)
- * - To use sandboxing without Unix socket blocking on unsupported architectures,
- *   set allowAllUnixSockets: true in your configuration
- * Dependencies are checked by checkLinuxDependencies() before enabling the sandbox.
+ * Bubblewrap owns namespace/mount setup and drops all capabilities. With Unix
+ * sockets restricted, our native PID 1 starts fork-only non-dumpable relays,
+ * closes infrastructure descriptors, installs hardened seccomp, then execs
+ * the workload. No bwrap child needs namespace capabilities. Missing native
+ * helpers and unsupported weak/observation modes fail closed.
+ * See vendor/linux-launcher/README.md in the enclosing pi-sandbox fork.
  */
 export async function wrapCommandWithSandboxLinux(
   params: LinuxSandboxParams,
@@ -1397,7 +1316,8 @@ export async function wrapCommandWithSandboxLinux(
     !needsNetworkRestriction &&
     !hasReadRestrictions &&
     !hasWriteRestrictions &&
-    !hasEnvRestrictions
+    !hasEnvRestrictions &&
+    allowAllUnixSockets === true
   ) {
     return command
   }
@@ -1411,55 +1331,15 @@ export async function wrapCommandWithSandboxLinux(
   activeSandboxCount++
 
   const bwrapArgs: string[] = ['--new-session', '--die-with-parent']
-  let applySeccompPrefix: string | undefined
+  let launcher: string | undefined
 
   try {
-    // ========== SECCOMP FILTER (Unix Socket Blocking) ==========
-    // apply-seccomp wraps the workload and applies the baked-in BPF filter
-    // that blocks socket(AF_UNIX, ...). Skipped when allowAllUnixSockets is true.
-    if (!allowAllUnixSockets) {
-      applySeccompPrefix = resolveApplySeccompPrefix(
-        seccompConfig?.applyPath,
-        seccompConfig?.argv0,
-      )
-
-      if (!applySeccompPrefix) {
-        logForDebugging(
-          '[Sandbox Linux] apply-seccomp binary not available - unix socket blocking disabled. ' +
-            'Install @anthropic-ai/sandbox-runtime globally for full protection.',
-          { level: 'warn' },
-        )
-      } else {
-        logForDebugging(
-          '[Sandbox Linux] Applying seccomp filter for Unix socket blocking',
-        )
-      }
-    } else {
-      logForDebugging(
-        '[Sandbox Linux] Skipping seccomp filter - allowAllUnixSockets is enabled',
-      )
+    launcher = allowAllUnixSockets === true ? undefined : requireLinuxLauncher()
+    if (launcher && (enableWeakerNestedSandbox || seccompConfig?.applyPath || seccompConfig?.argv0)) {
+      throw new Error('The capability-free launcher requires fresh /proc and the bundled native helper')
     }
-
-    // ========== VIOLATION OBSERVATION (best-effort) ==========
-    // Only meaningful when apply-seccomp will run — it is the binary that
-    // installs the USER_NOTIF filter and ships the listener fd.
-    if (observeSocketPath && applySeccompPrefix) {
-      if (fs.existsSync(observeSocketPath)) {
-        bwrapArgs.push('--bind', observeSocketPath, observeSocketPath)
-        bwrapArgs.push('--setenv', 'SRT_OBSERVE_SOCK', observeSocketPath)
-        // Tag events with the encoded command so the violation store can
-        // associate them with this invocation (parity with macOS log tag).
-        bwrapArgs.push(
-          '--setenv',
-          'SRT_ENCODED_CMD',
-          encodeSandboxedCommand(command),
-        )
-      } else {
-        logForDebugging(
-          '[Sandbox Linux] observe socket missing — supervisor not running; ' +
-            'continuing without violation monitoring',
-        )
-      }
+    if (launcher && observeSocketPath) {
+      throw new Error('Linux syscall observation is not supported by the capability-free launcher')
     }
 
     // ========== ENV RESTRICTIONS ==========
@@ -1500,15 +1380,6 @@ export async function wrapCommandWithSandboxLinux(
             `Linux SOCKS bridge socket does not exist: ${socksSocketPath}. ` +
               'The bridge process may have died. Try reinitializing the sandbox.',
           )
-        }
-
-        // Bind both sockets into the sandbox
-        bwrapArgs.push('--bind', httpSocketPath, httpSocketPath)
-        // When the mux serves both protocols, socksSocketPath is the same
-        // file as httpSocketPath; bwrap rejects a duplicate --bind of the
-        // same source→target.
-        if (socksSocketPath !== httpSocketPath) {
-          bwrapArgs.push('--bind', socksSocketPath, socksSocketPath)
         }
 
         // Add proxy environment variables
@@ -1562,6 +1433,13 @@ export async function wrapCommandWithSandboxLinux(
     )
     bwrapArgs.push(...fsArgs)
 
+    // Bind infrastructure AFTER the filesystem policy, so a broad read deny
+    // cannot hide it. Read-only mounts prevent command-side path replacement.
+    if (needsNetworkRestriction && httpSocketPath && socksSocketPath) {
+      bwrapArgs.push('--ro-bind', httpSocketPath, httpSocketPath)
+      if (socksSocketPath !== httpSocketPath) bwrapArgs.push('--ro-bind', socksSocketPath, socksSocketPath)
+    }
+    if (launcher) bwrapArgs.push('--ro-bind', path.dirname(launcher), path.dirname(launcher))
     // Always bind /dev
     bwrapArgs.push('--dev', '/dev')
 
@@ -1580,8 +1458,7 @@ export async function wrapCommandWithSandboxLinux(
       // command with full caps in the initial userns (CAP_SYS_ADMIN → remount
       // rw over --ro-bind / /). Force the userns and explicitly drop caps so
       // the sandboxed process cannot remount regardless of parent EUID.
-      // apply-seccomp does not need caps here — it creates its own nested
-      // userns to obtain CAP_SYS_ADMIN for its PID+mount unshare (see below).
+      // The native supervisor needs no capabilities and creates no namespaces.
       bwrapArgs.push('--unshare-user', '--cap-drop', 'ALL', '--proc', '/proc')
     } else {
       // --unshare-user: bwrap only auto-adds this when EUID != 0. In an
@@ -1589,17 +1466,12 @@ export async function wrapCommandWithSandboxLinux(
       // CAP_SYS_ADMIN), bwrap assumes it has caps, tries direct clone,
       // and EPERMs. Force the userns path so bwrap starts at all.
       //
-      // --bind /proc /proc: apply-seccomp's nested-userns path writes
-      // /proc/self/setgroups and uid_map. Without --proc above, the
-      // --ro-bind / / leaves /proc read-only and those writes EROFS.
-      bwrapArgs.push('--unshare-user', '--bind', '/proc', '/proc')
+      // Only the explicit unrestricted-Unix legacy path may request this
+      // weaker proc view; the native supervisor rejects it above.
+      bwrapArgs.push('--unshare-user', '--cap-drop', 'ALL', '--bind', '/proc', '/proc')
     }
 
-    // apply-seccomp obtains CAP_SYS_ADMIN for its nested PID+mount unshare
-    // by creating a nested user namespace. This requires the host to permit
-    // capability-bearing unprivileged user namespaces (the same requirement
-    // bwrap itself has when not installed setuid). See README for the
-    // Ubuntu 24.04 sysctl if AppArmor restricts this.
+    if (launcher) bwrapArgs.push('--as-pid-1')
 
     // ========== COMMAND ==========
     // Use the user's shell (zsh, bash, etc.) to ensure aliases/snapshots work
@@ -1609,26 +1481,17 @@ export async function wrapCommandWithSandboxLinux(
     if (!shell) {
       throw new Error(`Shell '${shellName}' not found in PATH`)
     }
-    bwrapArgs.push('--', shell, '-c')
-
-    // With network restrictions, route the command through buildSandboxCommand
-    // so socat starts before seccomp is applied. Otherwise invoke apply-seccomp
-    // directly if we have a binary.
-    if (needsNetworkRestriction && httpSocketPath && socksSocketPath) {
-      const sandboxCommand = buildSandboxCommand(
-        httpSocketPath,
-        socksSocketPath,
-        command,
-        applySeccompPrefix,
-        shell,
-        socatPath,
-      )
-      bwrapArgs.push(sandboxCommand)
-    } else if (applySeccompPrefix) {
-      const applySeccompCmd = applySeccompPrefix + quote([shell, '-c', command])
-      bwrapArgs.push(applySeccompCmd)
+    if (launcher) {
+      // No shell or stock socat executes before workload filtering.
+      bwrapArgs.push('--', launcher)
+      if (needsNetworkRestriction && httpSocketPath && socksSocketPath) {
+        bwrapArgs.push('--http-socket', httpSocketPath, '--socks-socket', socksSocketPath)
+      }
+      bwrapArgs.push('--', shell, '-c', command)
+    } else if (needsNetworkRestriction && httpSocketPath && socksSocketPath) {
+      bwrapArgs.push('--', shell, '-c', buildSandboxCommand(httpSocketPath, socksSocketPath, command, shell, socatPath))
     } else {
-      bwrapArgs.push(command)
+      bwrapArgs.push('--', shell, '-c', command)
     }
 
     const wrappedCommand = quote([bwrapPath ?? 'bwrap', ...bwrapArgs])
@@ -1638,7 +1501,7 @@ export async function wrapCommandWithSandboxLinux(
     if (hasReadRestrictions || hasWriteRestrictions)
       restrictions.push('filesystem')
     if (hasEnvRestrictions) restrictions.push('env')
-    if (applySeccompPrefix) restrictions.push('seccomp(unix-block)')
+    if (launcher) restrictions.push('native-supervisor', 'seccomp(hardened)')
 
     logForDebugging(
       `[Sandbox Linux] Wrapped command with bwrap (${restrictions.join(', ')} restrictions)`,

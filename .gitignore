@@ -1,2 +1,4 @@
 .pi
 node_modules
+vendor/sandbox-runtime/vendor/seccomp/
+vendor/sandbox-runtime/dist/

@@ -78,7 +78,9 @@ function session(cwd: string) {
 test(
   "sandboxed bash respects shellCommandPrefix",
   {
-    skip: process.platform !== "darwin",
+    skip:
+      process.platform !== "darwin" &&
+      !(process.platform === "linux" && process.env.PI_SANDBOX_NATIVE_TEST === "1"),
     timeout: 15_000,
   },
   async (t) => {
@@ -115,7 +117,9 @@ test(
 test(
   "a subagent shutdown does not stop its parent's bash or user shell",
   {
-    skip: process.platform !== "darwin",
+    skip:
+      process.platform !== "darwin" &&
+      !(process.platform === "linux" && process.env.PI_SANDBOX_NATIVE_TEST === "1"),
     timeout: 15_000,
   },
   async (t) => {

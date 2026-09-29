@@ -1,10 +1,10 @@
-import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
-
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
+
+import type { ISandboxManager, SandboxRuntimeConfig } from "./runtime.ts";
 
 import { type SandboxConfig } from "./config.ts";
 import { canonicalizePath } from "./policy.ts";
@@ -34,9 +34,9 @@ const canonicalizeFilesystemPatterns = (paths: string[]) =>
 function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
   if (platform !== "linux") return [];
 
-  // apply-seccomp executes inside the Bubblewrap namespace, so broad rules
-  // such as denyRead: ["/home"] must not hide the runtime's bundled helper.
-  const runtimeEntryUrl = import.meta.resolve("@carderne/sandbox-runtime");
+  // The native launcher executes inside Bubblewrap; broad /home read denials
+  // must not hide it. Always resolve this fork, never a global npm installation.
+  const runtimeEntryUrl = import.meta.resolve("../vendor/sandbox-runtime/src/index.ts");
   return [fileURLToPath(new URL("../vendor/seccomp", runtimeEntryUrl))];
 }
 
@@ -223,6 +223,7 @@ export function createSandboxedBashOps(
 ): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
+      if (signal?.aborted) throw new Error("aborted");
       if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
 
       const { shell, args } = getShellConfig(shellPath);
@@ -237,6 +238,10 @@ export function createSandboxedBashOps(
           ? `ssh() { /usr/bin/ssh -o 'ProxyCommand=/usr/bin/nc -X 5 -x localhost:${socksProxyPort} %h %p' "$@"; }; `
           : "";
       const wrappedCommand = await manager.wrapWithSandbox(`${sshProxyCommand}${command}`, shell);
+      if (signal?.aborted) {
+        manager.cleanupAfterCommand();
+        throw new Error("aborted");
+      }
 
       const child = spawn(shell, [...args, wrappedCommand], {
         cwd,

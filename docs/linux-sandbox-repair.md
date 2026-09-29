@@ -38,7 +38,7 @@ The installed helper also permits socketpair(AF_UNIX, SOCK_DGRAM). A harmless
 standalone test sent a datagram from such a pair to a private temporary external
 fixture even though socket(AF_UNIX) was denied. Close this filter gap too.
 
-## Chosen direction (not yet production ready)
+## Implemented direction
 
 Retain Bubblewrap and the existing host proxy/bridge infrastructure. Introduce
 a capability-free native supervisor inside Bubblewrap's existing namespaces:
@@ -99,12 +99,25 @@ not by changing this host's sysctls. Never probe real credential services.
 - Investigation committed as `5694dc6` on `fix/linux-capability-free-sandbox`.
 - Requested initialization failures now block Bash/user_bash, including calls
   before startup finishes. Explicit opt-outs and successful retries are tested.
-- `vendor/linux-launcher/launcher.c` implements a capability-free PID 1 and
-  hardened workload filter. The opt-in native suite passes on the affected
-  x86_64 Ubuntu host without host changes.
-- Native relays, runtime vendoring/wiring, network allowlist integration tests,
-  ARM64 validation, and release packaging remain outstanding. The native
-  foundation is deliberately not selected by production code yet.
+- `vendor/linux-launcher/launcher.c` and `relay.h` implement capability-free
+  PID 1, fork-only non-dumpable relays, pinned endpoints, bounded byte pumps,
+  hardened workload filtering, reaping, and fail-closed relay lifecycle.
+- Runtime source is vendored under `vendor/sandbox-runtime`; `src/runtime.ts`
+  directs Pi to it rather than the installed npm runtime. Native artifacts
+  are built locally and validated against source/binary hashes.
+- The native path is now selected by default when Unix sockets are restricted.
+  The old nested apply-seccomp executable is never selected on that path.
+- Native and end-to-end tests pass on the unchanged affected x86_64 Ubuntu host:
+  filesystem/IPC/helper isolation, HTTP and authenticated SOCKS allow/deny,
+  direct network denial, endpoint replacement, half-close/backpressure,
+  concurrent commands, live policy updates, timeout and relay-death cleanup.
+- Pi's actual jiti loader is covered by an integration test. The exact
+  `echo 'basic bash command OK'` command also passed with the user's existing
+  global configuration from `~/projects/personal/pi-sandbox-test`.
+- Rebuild via `corepack pnpm build:sandbox`, then reload/restart the extension.
+  ARM64 runner validation, multi-platform npm artifacts, and independent
+  security review remain outside this host-specific completion. Optional Linux
+  syscall observation is explicitly unsupported (Pi does not enable it).
 
 ## Upstream references
 

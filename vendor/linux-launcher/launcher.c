@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: MIT
- * Capability-free supervisor foundation. Not yet wired into sandbox-runtime.
+ * Capability-free supervisor and proxy relays for the vendored runtime.
  * bwrap supplies the PID/mount/user/network namespaces and drops ALL caps.
  * This program must be its direct --as-pid-1 command, never behind a shell.
  *
- * There are no relays yet: the unfiltered PID 1 is non-dumpable and never
- * execs. Only its child executes user code, after FD cleanup and seccomp.
+ * PID 1 and fork-only relays are non-dumpable and never exec. Only the
+ * workload child executes user code, after FD cleanup and seccomp.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -104,6 +104,8 @@ static void die(const char *message) {
     _exit(125);
 }
 
+#include "relay.h"
+
 static void require_zero_caps(void) {
     struct __user_cap_header_struct header = { .version = _LINUX_CAPABILITY_VERSION_3 };
     struct __user_cap_data_struct caps[2] = {{0}};
@@ -138,13 +140,17 @@ static void forward_signal(int number) {
     errno = saved;
 }
 
-static int reap_worker(pid_t worker) {
+static int reap_worker(pid_t worker, pid_t relay) {
     for (;;) {
         int status;
         pid_t child = waitpid(-1, &status, 0);
         if (child < 0) {
             if (errno == EINTR) continue;
             die("launcher: waitpid");
+        }
+        if (relay > 0 && child == relay) {
+            fputs("launcher: network relay exited; terminating sandbox\n", stderr);
+            return 125;
         }
         if (child != worker) continue;
         if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -154,10 +160,24 @@ static int reap_worker(pid_t worker) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 3 || strcmp(argv[1], "--") != 0) {
-        fputs("Usage: launcher -- COMMAND [ARGS...] (bwrap --as-pid-1 only)\n", stderr);
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        puts("pi-sandbox-launcher 1");
+        return 0;
+    }
+    const char *http = NULL, *socks = NULL;
+    int command = 1;
+    while (command < argc && strcmp(argv[command], "--") != 0) {
+        if (command + 1 >= argc) break;
+        if (!http && strcmp(argv[command], "--http-socket") == 0) http = argv[command+1];
+        else if (!socks && strcmp(argv[command], "--socks-socket") == 0) socks = argv[command+1];
+        else break;
+        command += 2;
+    }
+    if (command + 1 >= argc || strcmp(argv[command], "--") != 0 || (!!http != !!socks)) {
+        fputs("Usage: launcher [--http-socket PATH --socks-socket PATH] -- COMMAND [ARGS...]\n", stderr);
         return 125;
     }
+    command++;
     if (getpid() != 1) {
         fputs("launcher: requires Bubblewrap --as-pid-1\n", stderr);
         return 125;
@@ -168,6 +188,9 @@ int main(int argc, char **argv) {
     /* Drop any inherited control/directory/Unix/ring descriptors. stdio is the
      * only intentional inheritance. Linux >=5.9 is required; no weak fallback. */
     if (syscall(SYS_close_range, 3U, ~0U, 0) < 0) die("launcher: close_range");
+
+    // Pin bridge inodes and bind both TCP listeners before any workload exists.
+    pid_t relay = http ? start_relays(http, socks) : -1;
 
     sigset_t blocked;
     sigemptyset(&blocked);
@@ -198,7 +221,7 @@ int main(int argc, char **argv) {
         sigset_t empty;
         sigemptyset(&empty);
         if (sigprocmask(SIG_SETMASK, &empty, NULL) < 0) die("launcher: worker unblock");
-        execvp(argv[2], &argv[2]);
+        execvp(argv[command], &argv[command]);
         die("launcher: execvp");
     }
     worker_pid = child;
@@ -206,5 +229,5 @@ int main(int argc, char **argv) {
     sigemptyset(&empty);
     if (sigprocmask(SIG_SETMASK, &empty, NULL) < 0) die("launcher: unblock");
     /* PID 1 exiting makes the kernel kill every remaining namespace member. */
-    _exit(reap_worker(child));
+    _exit(reap_worker(child, relay));
 }
