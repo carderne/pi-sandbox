@@ -171,17 +171,76 @@ export function mergeConfigLayers(
   };
 }
 
+/**
+ * Strip `//` line and `/* *\/` block comments while preserving them inside
+ * strings, so the JSONC examples in the README parse as written.
+ */
+export function stripJsonComments(input: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && input[i + 1] === "/") {
+      while (i < input.length && input[i] !== "\n") i++;
+      if (i < input.length) out += "\n";
+      continue;
+    }
+    if (ch === "/" && input[i + 1] === "*") {
+      i += 2;
+      while (i < input.length && !(input[i] === "*" && input[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function parseConfig(configPath: string): SandboxConfigFile {
+  const parsed: unknown = JSON.parse(stripJsonComments(readFileSync(configPath, "utf-8")));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("configuration must be a JSON object");
+  }
+  return parsed as SandboxConfigFile;
+}
+
 function readJsonConfig(configPath: string, warn: boolean): SandboxConfigFile {
   if (!existsSync(configPath)) return {};
   try {
-    const parsed: unknown = JSON.parse(readFileSync(configPath, "utf-8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error("configuration must be a JSON object");
-    }
-    return parsed as SandboxConfigFile;
+    return parseConfig(configPath);
   } catch (error) {
     if (warn) console.error(`Warning: Could not parse ${configPath}: ${error}`);
     return {};
+  }
+}
+
+/**
+ * Read a config for the purpose of writing it back. If the file exists but
+ * cannot be parsed, throw instead of returning `{}` — otherwise a permission
+ * grant would silently overwrite (and destroy) the user's existing config.
+ */
+function readConfigForWrite(configPath: string): SandboxConfigFile {
+  if (!existsSync(configPath)) return {};
+  try {
+    return parseConfig(configPath);
+  } catch (error) {
+    throw new Error(
+      `Refusing to overwrite ${configPath}: existing file could not be parsed (${error}). ` +
+        `Fix the file manually, then retry.`,
+    );
   }
 }
 
@@ -205,7 +264,7 @@ function writeConfigFile(configPath: string, config: SandboxConfigFile): void {
 }
 
 export function addDomainToConfig(configPath: string, domain: string): void {
-  const config = readJsonConfig(configPath, false);
+  const config = readConfigForWrite(configPath);
   const existing = stringArray(config.network?.allowedDomains) ?? [];
   if (existing.includes(domain)) return;
 
@@ -217,7 +276,7 @@ export function addDomainToConfig(configPath: string, domain: string): void {
 }
 
 export function addReadPathToConfig(configPath: string, pathToAdd: string): void {
-  const config = readJsonConfig(configPath, false);
+  const config = readConfigForWrite(configPath);
   const existing = stringArray(config.filesystem?.allowRead) ?? [];
   if (existing.includes(pathToAdd)) return;
 
@@ -229,7 +288,7 @@ export function addReadPathToConfig(configPath: string, pathToAdd: string): void
 }
 
 export function addWritePathToConfig(configPath: string, pathToAdd: string): void {
-  const config = readJsonConfig(configPath, false);
+  const config = readConfigForWrite(configPath);
   const existing = stringArray(config.filesystem?.allowWrite) ?? [];
   if (existing.includes(pathToAdd)) return;
 
