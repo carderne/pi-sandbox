@@ -23,6 +23,12 @@ export type SandboxConfig = Omit<SandboxRuntimeConfig, "network" | "filesystem">
     allowUnauthenticatedSocksProxy?: boolean;
     /** Route ordinary `ssh` commands through the sandbox SOCKS proxy. */
     sshProxy?: boolean;
+    /**
+     * Disable network sandboxing entirely (no `--unshare-net`, no proxy) while
+     * keeping filesystem sandboxing. The sandboxed process gets direct network
+     * access via the host's routing/DNS/VPN. Opt-in; reduces protection.
+     */
+    disabled?: boolean;
   };
 };
 

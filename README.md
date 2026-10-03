@@ -78,6 +78,7 @@ Note below that the order of precedence for filesystem read and write are opposi
     "allowLocalBinding": true,     // ditto
     "allowAllUnixSockets": true,   // ditto
     "allowUnauthenticatedSocksProxy": true, // Enables Git-over-SSH on macOS
+    "disabled": false,             // Set true for direct network access (no proxy/--unshare-net) while keeping filesystem sandboxing
     "allowedDomains": ["github.com", "*.github.com"],
     "deniedDomains": []
   },
@@ -166,6 +167,13 @@ implies read access; paths do not need to be repeated in `allowRead`.
 `allowUnauthenticatedSocksProxy` is enabled by default on macOS so Git-over-SSH
 works with the built-in `nc`. Domain filtering still applies, but another local process
 that discovers the temporary proxy port can use it while the sandbox is running.
+
+`network.disabled` turns off network sandboxing entirely: no `--unshare-net` and
+no proxy, so the sandboxed process gets direct network access via the host's
+routing, DNS, and VPN. Filesystem sandboxing is unaffected. This is useful for
+tools that don't honour `HTTP(S)_PROXY`/`ALL_PROXY`, mTLS/gRPC/WebSocket edge
+cases, or local-network access. It is opt-in and reduces protection — `allowedDomains`
+filtering no longer applies when set.
 
 > **⚠️ Read and write have different precedence rules:**
 >
