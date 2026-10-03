@@ -56,9 +56,11 @@ export default function (pi: ExtensionAPI) {
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
+  let projectTrusted = false;
   const allowances: SessionAllowances = { domains: [], readPaths: [], writePaths: [] };
 
-  const effectiveAllowances = (cwd: string) => resolveAllowances(loadConfig(cwd), allowances);
+  const effectiveAllowances = (cwd: string) =>
+    resolveAllowances(loadConfig(cwd, projectTrusted), allowances);
   const effectiveDomains = (cwd: string) => effectiveAllowances(cwd).domains;
   const effectiveReadPaths = (cwd: string) => effectiveAllowances(cwd).readPaths;
   const effectiveWritePaths = (cwd: string) => effectiveAllowances(cwd).writePaths;
@@ -66,7 +68,7 @@ export default function (pi: ExtensionAPI) {
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     try {
-      updateSandboxConfig(sandboxManager, loadConfig(cwd), allowances, cwd);
+      updateSandboxConfig(sandboxManager, loadConfig(cwd, projectTrusted), allowances, cwd);
     } catch (error) {
       console.error(`Warning: Failed to update sandbox configuration: ${error}`);
     }
@@ -110,7 +112,7 @@ export default function (pi: ExtensionAPI) {
       return false;
     }
 
-    const config = loadConfig(ctx.cwd);
+    const config = loadConfig(ctx.cwd, projectTrusted);
     const platform = process.platform;
     if (platform !== "darwin" && platform !== "linux") {
       ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
@@ -171,7 +173,7 @@ export default function (pi: ExtensionAPI) {
     label: "bash (sandboxed)",
     async execute(id, params, signal, onUpdate, ctx) {
       const runBash = () => {
-        const settings = SettingsManager.create(ctx.cwd);
+        const settings = SettingsManager.create(ctx.cwd, undefined, { projectTrusted });
         const userShellPath = settings.getShellPath();
         return createBashToolDefinition(ctx.cwd, {
           operations:
@@ -179,7 +181,7 @@ export default function (pi: ExtensionAPI) {
               ? createSandboxedBashOps(
                   sandboxManager,
                   userShellPath,
-                  loadConfig(ctx.cwd).network?.sshProxy !== false,
+                  loadConfig(ctx.cwd, projectTrusted).network?.sshProxy !== false,
                 )
               : undefined,
           commandPrefix: settings.getShellCommandPrefix(),
@@ -214,7 +216,7 @@ export default function (pi: ExtensionAPI) {
 
         if (blockedPath) {
           const path = canonicalizePath(blockedPath, ctx.cwd);
-          const config = loadConfig(ctx.cwd);
+          const config = loadConfig(ctx.cwd, projectTrusted);
           const writePermission = await resolveWritePermission({
             path,
             allowWrite: effectiveWritePaths(ctx.cwd),
@@ -252,8 +254,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("user_bash", async (event, ctx) => {
     if (!sandboxEnabled || !sandboxInitialized) return;
 
-    const userShellPath = SettingsManager.create(ctx.cwd).getShellPath();
-    const config = loadConfig(ctx.cwd);
+    const userShellPath = SettingsManager.create(ctx.cwd, undefined, {
+      projectTrusted,
+    }).getShellPath();
+    const config = loadConfig(ctx.cwd, projectTrusted);
     if (config.sandboxUserShell === false) return;
     for (const domain of extractDomainsFromCommand(event.command)) {
       if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
@@ -280,14 +284,14 @@ export default function (pi: ExtensionAPI) {
       operations: createSandboxedBashOps(
         sandboxManager,
         userShellPath,
-        loadConfig(ctx.cwd).network?.sshProxy !== false,
+        loadConfig(ctx.cwd, projectTrusted).network?.sshProxy !== false,
       ),
     };
   });
 
   pi.on("tool_call", async (event, ctx) => {
     if (!sandboxEnabled) return;
-    const config = loadConfig(ctx.cwd);
+    const config = loadConfig(ctx.cwd, projectTrusted);
     if (!config.enabled) return;
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
 
@@ -354,12 +358,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    projectTrusted = ctx.isProjectTrusted();
     if (pi.getFlag("no-sandbox") as boolean) {
       sandboxEnabled = false;
       ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
       return;
     }
-    if (!loadConfig(ctx.cwd).enabled) {
+    if (!loadConfig(ctx.cwd, projectTrusted).enabled) {
       sandboxEnabled = false;
       ctx.ui.notify("Sandbox disabled via config", "info");
       return;
@@ -407,7 +412,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const target = kind === "domain" ? targetArg : canonicalizePath(targetArg, ctx.cwd);
-      const config = loadConfig(ctx.cwd);
+      const config = loadConfig(ctx.cwd, projectTrusted);
       const configKey =
         kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
       const choice = await showPermissionPrompt(
@@ -443,7 +448,11 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       ctx.ui.notify(
-        formatSandboxConfiguration(loadConfig(ctx.cwd), getConfigPaths(ctx.cwd), allowances),
+        formatSandboxConfiguration(
+          loadConfig(ctx.cwd, projectTrusted),
+          getConfigPaths(ctx.cwd),
+          allowances,
+        ),
         "info",
       );
     },
