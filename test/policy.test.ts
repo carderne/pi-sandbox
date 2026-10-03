@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   allowsAllDomains,
   canonicalizePath,
+  deepestExistingAncestor,
   decideWritePolicy,
   domainIsAllowed,
   extractDomainsFromCommand,
@@ -105,6 +106,15 @@ test("path patterns support directory prefixes and globs", () => {
   assert.equal(matchesPattern(join(root, "nested", "file.txt"), [root]), true);
   assert.equal(matchesPattern(join(root, "file.pem"), [join(root, "*.pem")]), true);
   assert.equal(matchesPattern(join(root, "file.txt"), [join(root, "*.pem")]), false);
+});
+
+test("deepestExistingAncestor walks up to the nearest existing directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-ancestor-"));
+  const dir = join(root, "a");
+  mkdirSync(dir);
+  assert.equal(deepestExistingAncestor(join(dir, "missing", "file")), canonicalizePath(dir));
+  assert.equal(deepestExistingAncestor(dir), canonicalizePath(dir));
+  assert.equal(deepestExistingAncestor("/definitely-not-real-9182736451/x"), "/");
 });
 
 test("canonicalizes symlinks and nonexistent descendants", () => {

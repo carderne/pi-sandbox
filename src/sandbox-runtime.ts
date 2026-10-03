@@ -2,6 +2,8 @@ import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-ru
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -117,11 +119,93 @@ export function supportsNodeEnvProxy(version: string): boolean {
   return (major === 22 && minor >= 21) || major >= 24;
 }
 
+export const SANDBOX_WRITE_DENY_RE = /Operation not permitted|Read-only file system/;
+
+// Some locales (e.g. en_US.UTF-8 coreutils mkdir) print Unicode curly quotes;
+// others print ASCII. Strip both.
+const QUOTES_RE = /^[\u2018\u2019\u201c\u201d'"`]+|[\u2018\u2019\u201c\u201d'"`]+$/g;
+
+function stripQuotes(token: string): string {
+  return token.replace(QUOTES_RE, "");
+}
+
+function looksLikePath(token: string): boolean {
+  return token.includes("/") || token.startsWith("~") || token.startsWith(".");
+}
+
+function extractPathFromDenyLine(line: string): string | null {
+  const deny = line.match(SANDBOX_WRITE_DENY_RE);
+  if (!deny) return null;
+  const prefix = line
+    .slice(0, deny.index)
+    .replace(/[\s:]+$/, "")
+    .trim();
+  // Last quoted span first — it may contain spaces that token splitting would break.
+  const quoted = [
+    ...prefix.matchAll(/[\u2018\u201c'"`]([^\u2019\u201d'"`]+)[\u2019\u201d'"`]/g),
+  ].at(-1);
+  if (quoted) return quoted[1];
+  const last = prefix.split(/\s+/).pop() ?? "";
+  const token = stripQuotes(last);
+  return token && looksLikePath(token) ? token : null;
+}
+
+function findLastDenyLine(output: string): string | null {
+  const lines = output.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (SANDBOX_WRITE_DENY_RE.test(lines[i])) return lines[i];
+  }
+  return null;
+}
+
+/** Last path token (quoted, absolute, or relative) on the final write-deny line. */
 export function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(
-    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
-  );
-  return match ? match[1] : null;
+  const line = findLastDenyLine(output);
+  return line ? extractPathFromDenyLine(line) : null;
+}
+
+const GIT_DIAGNOSTIC_RE = /^\s*(?:fatal|error|git):/;
+
+/** True when the final write-deny line is a Git diagnostic, not the shell's. */
+export function blockedWriteIsFromGit(output: string): boolean {
+  const line = findLastDenyLine(output);
+  return line !== null && GIT_DIAGNOSTIC_RE.test(line);
+}
+
+/**
+ * Cwd a blocked relative path resolves against. `cd` folds persistently; `git -C`
+ * (when applyGitC) applies only to the last command segment. Heuristic: skipped
+ * branches, subshells, and shell redirects are not modeled.
+ */
+export function effectiveCommandCwd(command: string, baseCwd: string, applyGitC = true): string {
+  let cwd = baseCwd;
+  for (const match of command.matchAll(/(?:^|[;&|(]\s*|\s+)cd\s+("[^"]*"|'[^']*'|[^\s;&|)]+)/g)) {
+    cwd = foldTarget(match[1], cwd);
+  }
+  const lastSegment = command.split(/\s*(?:&&|\|\||[;&|])\s*/).pop() ?? "";
+  const gitC = [
+    ...lastSegment.matchAll(
+      /\bgit\s+(?:-[A-Za-z0-9]+(?:\s+\S+)?\s+)*-C\s+("[^"]*"|'[^']*'|[^\s;&|)]+)/g,
+    ),
+  ].at(-1);
+  if (applyGitC && gitC) cwd = foldTarget(gitC[1], cwd);
+  return cwd;
+}
+
+function foldTarget(raw: string, cwd: string): string {
+  const target = stripQuotes(raw);
+  const expanded = target.replace(/^~(?=$|\/)/, homedir());
+  if (target && (isAbsolute(expanded) || expanded === "-")) {
+    return expanded === "-" ? cwd : expanded;
+  }
+  if (target) return resolve(cwd, expanded);
+  return cwd;
+}
+
+/** Resolve a blocked path (possibly relative or ~-prefixed) against the command's cwd. */
+export function resolveBlockedPath(path: string, commandCwd: string): string {
+  const expanded = path.replace(/^~(?=$|\/)/, homedir());
+  return isAbsolute(expanded) ? expanded : resolve(commandCwd, expanded);
 }
 
 const EXIT_STDIO_GRACE_MS = 100;

@@ -1,5 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,10 +10,13 @@ import assert from "node:assert/strict";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
+  blockedWriteIsFromGit,
   buildRuntimeConfig,
   createSandboxedBashOps,
+  effectiveCommandCwd,
   extractBlockedWritePath,
   resolveAllowances,
+  resolveBlockedPath,
   supportsNodeEnvProxy,
 } from "../src/sandbox-runtime.ts";
 
@@ -136,7 +139,116 @@ test("extractBlockedWritePath recognizes shell sandbox errors", () => {
     extractBlockedWritePath("bash: line 1: /private/file: Operation not permitted"),
     "/private/file",
   );
+  assert.equal(extractBlockedWritePath("sh: /home/x/y: Read-only file system"), "/home/x/y");
   assert.equal(extractBlockedWritePath("permission denied"), null);
+});
+
+test("extractBlockedWritePath recognizes external command sandbox errors", () => {
+  assert.equal(
+    extractBlockedWritePath(
+      "fatal: Unable to create '/repo/.git/config.lock': Read-only file system",
+    ),
+    "/repo/.git/config.lock",
+  );
+  assert.equal(
+    extractBlockedWritePath("mv: cannot move '/a/b' to '/c/d': Read-only file system"),
+    "/c/d",
+  );
+  assert.equal(extractBlockedWritePath("hint: '/some/path' was Read-only earlier"), null);
+});
+
+test("extractBlockedWritePath recognizes relative and unquoted paths", () => {
+  assert.equal(
+    extractBlockedWritePath("touch: cannot touch 'sandbox_probe_rel3': Read-only file system"),
+    "sandbox_probe_rel3",
+  );
+  assert.equal(
+    extractBlockedWritePath("error: could not lock config file .git/config: Read-only file system"),
+    ".git/config",
+  );
+  assert.equal(
+    extractBlockedWritePath("mkdir: cannot create directory 'node_modules': Read-only file system"),
+    "node_modules",
+  );
+  assert.equal(extractBlockedWritePath("bash: Read-only file system"), null);
+  assert.equal(extractBlockedWritePath("echo: 42: Read-only file system"), null);
+  assert.equal(
+    extractBlockedWritePath(
+      "mkdir: cannot create directory \u2018node_modules\u2019: Read-only file system",
+    ),
+    "node_modules",
+  );
+});
+
+test("extractBlockedWritePath keeps quoted spans containing spaces intact", () => {
+  assert.equal(
+    extractBlockedWritePath("mv: cannot move '/a' to '/target dir/file': Read-only file system"),
+    "/target dir/file",
+  );
+  assert.equal(extractBlockedWritePath('touch: cannot touch "a b": Read-only file system'), "a b");
+  assert.equal(
+    extractBlockedWritePath(
+      "mkdir: cannot create directory \u2018my dir\u2019: Read-only file system",
+    ),
+    "my dir",
+  );
+});
+
+test("effectiveCommandCwd honors the last cd in a command", () => {
+  assert.equal(effectiveCommandCwd("touch file", "/base"), "/base");
+  assert.equal(effectiveCommandCwd("cd /a/b && touch file", "/base"), "/a/b");
+  assert.equal(effectiveCommandCwd("cd sub && touch file", "/base"), "/base/sub");
+  assert.equal(effectiveCommandCwd("cd /a && cd sub; touch file", "/base"), "/a/sub");
+});
+
+test("effectiveCommandCwd folds git -C onto the running cwd", () => {
+  assert.equal(effectiveCommandCwd("git -C /repoB config user.name x", "/repoA"), "/repoB");
+  assert.equal(effectiveCommandCwd("git -C sub config core.bare true", "/base"), "/base/sub");
+  assert.equal(
+    effectiveCommandCwd("cd sub && git -C other config x y", "/base"),
+    "/base/sub/other",
+  );
+  assert.equal(effectiveCommandCwd("git -c a=b -C /d config x y", "/base"), "/d");
+  assert.equal(effectiveCommandCwd("git -c user.name=x config core.bare true", "/base"), "/base");
+  assert.equal(effectiveCommandCwd('git -C "/with space" config x y', "/base"), "/with space");
+});
+
+test("effectiveCommandCwd keeps git -C scoped to the git invocation", () => {
+  assert.equal(effectiveCommandCwd("git -C /repo status; touch relative-file", "/base"), "/base");
+  assert.equal(effectiveCommandCwd("cd /a && git -C sub && true", "/base"), "/a");
+  assert.equal(
+    effectiveCommandCwd("git -C /repo config x y; cd /other && touch f", "/base"),
+    "/other",
+  );
+});
+
+test("effectiveCommandCwd skips git -C when the deny came from the shell", () => {
+  // Shell redirect target belongs to the shell cwd, not the git -C dir.
+  assert.equal(effectiveCommandCwd("git -C /repo status > relative-file", "/base", false), "/base");
+  assert.equal(effectiveCommandCwd("git -C /repo status > relative-file", "/base", true), "/repo");
+  assert.equal(effectiveCommandCwd("cd /a && git -C sub && true", "/base", false), "/a");
+});
+
+test("blockedWriteIsFromGit identifies the diagnostic source", () => {
+  assert.equal(
+    blockedWriteIsFromGit(
+      "fatal: Unable to create '/repo/.git/config.lock': Read-only file system",
+    ),
+    true,
+  );
+  assert.equal(
+    blockedWriteIsFromGit("error: could not lock config file .git/config: Read-only file system"),
+    true,
+  );
+  assert.equal(blockedWriteIsFromGit("bash: line 1: relative-file: Read-only file system"), false);
+  assert.equal(blockedWriteIsFromGit("touch: cannot touch 'x': Read-only file system"), false);
+  assert.equal(blockedWriteIsFromGit("no deny here"), false);
+});
+
+test("resolveBlockedPath resolves relative and ~-prefixed paths", () => {
+  assert.equal(resolveBlockedPath(".git/config", "/repo"), "/repo/.git/config");
+  assert.equal(resolveBlockedPath("/abs/file", "/repo"), "/abs/file");
+  assert.equal(resolveBlockedPath("~/work/x", "/repo"), join(homedir(), "work/x"));
 });
 
 test("supportsNodeEnvProxy observes Node release boundaries", () => {
