@@ -21,6 +21,7 @@ test("omitted settings use their defaults", () => {
   assert.equal(DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS, 600);
   assert.equal(merged.permissionPromptTimeoutSeconds, DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS);
   assert.equal(merged.sandboxUserShell, true);
+  assert.equal(merged.network?.allowSSHAgentSocket, undefined);
 });
 
 test("mergeConfigLayers combines configured arrays and deduplicates entries", () => {
