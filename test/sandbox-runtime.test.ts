@@ -216,3 +216,13 @@ test("exec rejects when an in-flight command is aborted", async (t) => {
     new Error("aborted"),
   );
 });
+
+test("buildRuntimeConfig forwards credentials verbatim", () => {
+  const credentials = {
+    envVars: [{ name: "GITHUB_TOKEN", mode: "deny" as const }],
+    files: [{ path: "~/.pi/agent/auth.json", mode: "deny" as const }],
+  };
+
+  assert.deepEqual(buildRuntimeConfig({ ...DEFAULT_CONFIG, credentials }).credentials, credentials);
+  assert.equal(buildRuntimeConfig(DEFAULT_CONFIG).credentials, undefined);
+});

@@ -84,6 +84,7 @@ export function buildRuntimeConfig(
       denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? []),
     },
     ignoreViolations: config.ignoreViolations,
+    credentials: config.credentials,
     enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
     allowBrowserProcess: config.allowBrowserProcess,
     allowPty: config.allowPty,
