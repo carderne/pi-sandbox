@@ -7,14 +7,22 @@ settings:
 overrides:
   minimatch: '>=10.2.1'
   lodash-es: '>=4.18.1'
+  brace-expansion@>=4.0.0 <5.0.8: '>=5.0.8'
+  undici@>=8.0.0 <8.9.0: '>=8.9.0'
+  brace-expansion@>=4.0.0 <5.0.9: '>=5.0.9'
+  undici@>=8.1.0 <8.10.2: '>=8.10.2'
+  undici@>=8.0.0 <8.10.2: '>=8.10.2'
+  brace-expansion@>=4.0.0 <5.0.12: '>=5.0.12'
+  brace-expansion@>=4.0.0 <5.0.11: '>=5.0.11'
+  brace-expansion@>=4.0.0 <5.0.10: '>=5.0.10'
 
 importers:
 
   .:
     dependencies:
       '@carderne/sandbox-runtime':
-        specifier: ^0.0.74
-        version: 0.0.74
+        specifier: ^0.0.75
+        version: 0.0.75
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: ^0.80.0
@@ -150,8 +158,8 @@ packages:
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
-  '@carderne/sandbox-runtime@0.0.74':
-    resolution: {integrity: sha512-cSHaZWNFWHun4ee3vOY06vd3O9Ni9S/6IKeKDb175lBBFmjrHS99RtA20cUKAtQW3L8kZ5rTzVNTMZWY/U8bkA==}
+  '@carderne/sandbox-runtime@0.0.75':
+    resolution: {integrity: sha512-ZyZ3WvuLaM9nmrkw3zEx6wkeF8pnjnFlsMSnDicn6klzQ2xINRcPHoyx5hC8aShxDlagxoGmq2O6IHxCy1DJJw==}
     engines: {node: '>=20.11.0'}
     hasBin: true
 
@@ -762,9 +770,9 @@ packages:
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
 
-  brace-expansion@5.0.7:
-    resolution: {integrity: sha512-7oFy703dxfY3/NLxC1fh2SUCQ0H9rmAY+5EpDVfXjUTTs+HEwR2nYaqLv+GWcTsumwxPfiz6CzCNkwXwBUwqCA==}
-    engines: {node: 18 || 20 || >=22}
+  brace-expansion@5.0.12:
+    resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
+    engines: {node: 20 || >=22}
 
   buffer-equal-constant-time@1.0.1:
     resolution: {integrity: sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==}
@@ -1029,8 +1037,8 @@ packages:
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
-  undici@8.5.0:
-    resolution: {integrity: sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==}
+  undici@8.11.2:
+    resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
     engines: {node: '>=22.19.0'}
 
   web-streams-polyfill@3.3.3:
@@ -1294,7 +1302,7 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@carderne/sandbox-runtime@0.0.74':
+  '@carderne/sandbox-runtime@0.0.75':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       commander: 12.1.0
@@ -1354,7 +1362,7 @@ snapshots:
       proper-lockfile: 4.1.2
       semver: 7.8.0
       typebox: 1.1.38
-      undici: 8.5.0
+      undici: 8.11.2
       yaml: 2.9.0
     optionalDependencies:
       '@mariozechner/clipboard': 0.3.9
@@ -1727,7 +1735,7 @@ snapshots:
 
   bowser@2.14.1: {}
 
-  brace-expansion@5.0.7:
+  brace-expansion@5.0.12:
     dependencies:
       balanced-match: 4.0.4
 
@@ -1891,7 +1899,7 @@ snapshots:
 
   minimatch@10.2.5:
     dependencies:
-      brace-expansion: 5.0.7
+      brace-expansion: 5.0.12
 
   minipass@7.1.3: {}
 
@@ -2026,7 +2034,7 @@ snapshots:
 
   undici-types@7.18.2: {}
 
-  undici@8.5.0: {}
+  undici@8.11.2: {}
 
   web-streams-polyfill@3.3.3: {}
 

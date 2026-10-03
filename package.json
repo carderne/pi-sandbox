@@ -39,7 +39,7 @@
     "ci:test": "pnpm test"
   },
   "dependencies": {
-    "@carderne/sandbox-runtime": "^0.0.74"
+    "@carderne/sandbox-runtime": "^0.0.75"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.0",
@@ -62,7 +62,15 @@
   "pnpm": {
     "overrides": {
       "minimatch": ">=10.2.1",
-      "lodash-es": ">=4.18.1"
+      "lodash-es": ">=4.18.1",
+      "brace-expansion@>=4.0.0 <5.0.8": ">=5.0.8",
+      "undici@>=8.0.0 <8.9.0": ">=8.9.0",
+      "brace-expansion@>=4.0.0 <5.0.9": ">=5.0.9",
+      "undici@>=8.1.0 <8.10.2": ">=8.10.2",
+      "undici@>=8.0.0 <8.10.2": ">=8.10.2",
+      "brace-expansion@>=4.0.0 <5.0.12": ">=5.0.12",
+      "brace-expansion@>=4.0.0 <5.0.11": ">=5.0.11",
+      "brace-expansion@>=4.0.0 <5.0.10": ">=5.0.10"
     }
   }
 }
