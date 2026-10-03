@@ -49,14 +49,10 @@ export default function (pi: ExtensionAPI) {
     default: false,
   });
 
-  const localCwd = process.cwd();
-  const settings = SettingsManager.create(localCwd);
-  const userShellPath = settings.getShellPath();
-  const shellCommandPrefix = settings.getShellCommandPrefix();
-  const localBash = createBashToolDefinition(localCwd, {
-    commandPrefix: shellCommandPrefix,
-    shellPath: userShellPath,
-  });
+  // localBash supplies the tool metadata (name, description, params) via the spread
+  // below. Its execute method is always overridden, and each invocation rebuilds the
+  // bash tool against the session cwd, so this cwd is never used to run commands.
+  const localBash = createBashToolDefinition(process.cwd());
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
@@ -175,16 +171,18 @@ export default function (pi: ExtensionAPI) {
     label: "bash (sandboxed)",
     async execute(id, params, signal, onUpdate, ctx) {
       const runBash = () => {
-        if (!sandboxEnabled || !sandboxInitialized) {
-          return localBash.execute(id, params, signal, onUpdate, ctx);
-        }
-        return createBashToolDefinition(localCwd, {
-          operations: createSandboxedBashOps(
-            sandboxManager,
-            userShellPath,
-            loadConfig(ctx.cwd).network?.sshProxy !== false,
-          ),
-          commandPrefix: shellCommandPrefix,
+        const settings = SettingsManager.create(ctx.cwd);
+        const userShellPath = settings.getShellPath();
+        return createBashToolDefinition(ctx.cwd, {
+          operations:
+            sandboxEnabled && sandboxInitialized
+              ? createSandboxedBashOps(
+                  sandboxManager,
+                  userShellPath,
+                  loadConfig(ctx.cwd).network?.sshProxy !== false,
+                )
+              : undefined,
+          commandPrefix: settings.getShellCommandPrefix(),
           shellPath: userShellPath,
         }).execute(id, params, signal, onUpdate, ctx);
       };
@@ -254,6 +252,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("user_bash", async (event, ctx) => {
     if (!sandboxEnabled || !sandboxInitialized) return;
 
+    const userShellPath = SettingsManager.create(ctx.cwd).getShellPath();
     const config = loadConfig(ctx.cwd);
     if (config.sandboxUserShell === false) return;
     for (const domain of extractDomainsFromCommand(event.command)) {
