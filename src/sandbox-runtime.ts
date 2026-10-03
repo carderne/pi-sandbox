@@ -74,8 +74,11 @@ export function buildRuntimeConfig(
   // policies are unaffected.
   // Strip `allowedDomains` from the spread so the disabled branch can truly omit
   // it (it is re-added below in the non-disabled branch).
-  const { disabled: networkDisabled, allowedDomains: _allowedDomains, ...networkConfig } =
-    config.network ?? {};
+  const {
+    disabled: networkDisabled,
+    allowedDomains: _allowedDomains,
+    ...networkConfig
+  } = config.network ?? {};
 
   const runtimeConfig: SandboxRuntimeConfig = {
     network: {
