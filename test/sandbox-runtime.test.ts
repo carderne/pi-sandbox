@@ -259,3 +259,23 @@ test("buildRuntimeConfig forwards credentials verbatim", () => {
   assert.deepEqual(buildRuntimeConfig({ ...DEFAULT_CONFIG, credentials }).credentials, credentials);
   assert.equal(buildRuntimeConfig(DEFAULT_CONFIG).credentials, undefined);
 });
+
+test("network.disabled omits allowedDomains so the runtime skips network isolation", () => {
+  const runtime = buildRuntimeConfig({
+    ...DEFAULT_CONFIG,
+    network: { ...DEFAULT_CONFIG.network!, disabled: true },
+  });
+  // The runtime treats absent allowedDomains as "no network restriction"
+  // (needsNetworkRestriction stays false: no --unshare-net, no proxy).
+  assert.equal(runtime.network?.allowedDomains, undefined);
+  // The network object must survive — the runtime reads other keys off it
+  // unconditionally (e.g. parentProxy at initialize).
+  assert.notEqual(runtime.network, undefined);
+  assert.deepEqual(runtime.network?.deniedDomains, []);
+  // `disabled` is a pi-sandbox-only key and must not leak to the runtime config.
+  assert.equal((runtime.network as { disabled?: boolean }).disabled, undefined);
+
+  // Default (not disabled) still emits the allowlist.
+  const normal = buildRuntimeConfig(DEFAULT_CONFIG);
+  assert.equal(Array.isArray(normal.network?.allowedDomains), true);
+});

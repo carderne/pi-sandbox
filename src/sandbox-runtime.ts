@@ -67,12 +67,24 @@ export function buildRuntimeConfig(
 ): SandboxRuntimeConfig {
   const effective = resolveAllowances(config, allowances);
 
-  return {
+  // When network sandboxing is disabled, omit `allowedDomains` so the runtime's
+  // `needsNetworkRestriction` stays false: no `--unshare-net`, no proxy. The
+  // `network` object itself must remain present — the runtime reads other keys
+  // off it unconditionally (e.g. `network.parentProxy` at initialize). Filesystem
+  // policies are unaffected.
+  // Strip `allowedDomains` from the spread so the disabled branch can truly omit
+  // it (it is re-added below in the non-disabled branch).
+  const { disabled: networkDisabled, allowedDomains: _allowedDomains, ...networkConfig } =
+    config.network ?? {};
+
+  const runtimeConfig: SandboxRuntimeConfig = {
     network: {
-      ...config.network,
-      allowedDomains: effective.domains,
+      ...networkConfig,
+      // Omit allowedDomains when disabled; the runtime treats `undefined` as
+      // "no network restriction configured".
+      ...(networkDisabled ? {} : { allowedDomains: effective.domains }),
       deniedDomains: config.network?.deniedDomains ?? [],
-    },
+    } as SandboxRuntimeConfig["network"],
     filesystem: {
       disabled: config.filesystem?.disabled,
       denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? []),
@@ -93,6 +105,8 @@ export function buildRuntimeConfig(
     allowPty: config.allowPty,
     enableWeakerNetworkIsolation: true,
   };
+
+  return runtimeConfig;
 }
 
 export async function initializeSandbox(
