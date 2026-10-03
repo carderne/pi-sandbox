@@ -2,6 +2,7 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import {
+  DEFAULT_CONFIG,
   DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
   getConfigPaths,
   type SandboxConfig,
@@ -351,6 +352,34 @@ export function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxCo
   ctx.ui.notify(
     '⚠️ Network sandbox allows all domains because network.allowedDomains contains "*". ' +
       'Only use this intentionally; remove "*" to restore per-domain prompts.',
+    "warning",
+  );
+}
+
+const hasGlob = (p: string) => /[*?[\]]/.test(p);
+
+/**
+ * Linux bwrap silently drops glob allowWrite/denyWrite entries (the runtime
+ * only expands read globs). Warn once about user-supplied globs — the built-in
+ * defaults are excluded so a stock install stays quiet.
+ */
+export function warnIfLinuxUnenforcedGlobs(
+  ctx: ExtensionContext,
+  config: SandboxConfig,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== "linux") return;
+  const userGlobs = (key: "allowWrite" | "denyWrite") => {
+    const defaults = new Set(DEFAULT_CONFIG.filesystem?.[key] ?? []);
+    return (config.filesystem?.[key] ?? []).filter((p) => hasGlob(p) && !defaults.has(p));
+  };
+  const parts = (["allowWrite", "denyWrite"] as const)
+    .map((key) => ({ key, globs: userGlobs(key) }))
+    .filter(({ globs }) => globs.length > 0)
+    .map(({ key, globs }) => `filesystem.${key}: ${globs.join(", ")}`);
+  if (parts.length === 0) return;
+  ctx.ui.notify(
+    `⚠️ Linux bash sandbox cannot enforce glob path patterns; these are ignored there (use literal paths):\n  ${parts.join("\n  ")}`,
     "warning",
   );
 }

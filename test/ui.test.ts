@@ -3,12 +3,41 @@ import test from "node:test";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 
+import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
   permissionOptions,
   permissionPromptRemainingSeconds,
   permissionPromptTimeoutMs,
   showPermissionPrompt,
+  warnIfLinuxUnenforcedGlobs,
 } from "../src/ui.ts";
+
+test("warnIfLinuxUnenforcedGlobs warns only for user-supplied write globs on Linux", () => {
+  const warnings: string[] = [];
+  const ctx = { ui: { notify: (m: string, l: string) => l === "warning" && warnings.push(m) } };
+  const cfg = (fs: object) =>
+    ({
+      ...DEFAULT_CONFIG,
+      filesystem: { ...DEFAULT_CONFIG.filesystem, ...fs },
+    }) as typeof DEFAULT_CONFIG;
+
+  // stock defaults: silent
+  warnIfLinuxUnenforcedGlobs(ctx as never, DEFAULT_CONFIG, "linux");
+  assert.equal(warnings.length, 0);
+
+  // user glob on Linux: one warning naming the key/value
+  warnIfLinuxUnenforcedGlobs(ctx as never, cfg({ denyWrite: ["*.secret"] }), "linux");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /filesystem\.denyWrite: \*\.secret/);
+
+  // same config on macOS: silent
+  warnIfLinuxUnenforcedGlobs(ctx as never, cfg({ denyWrite: ["*.secret"] }), "darwin");
+  assert.equal(warnings.length, 1);
+
+  // literal-only user entry: silent
+  warnIfLinuxUnenforcedGlobs(ctx as never, cfg({ allowWrite: ["/srv/app"] }), "linux");
+  assert.equal(warnings.length, 1);
+});
 
 test("permissionPromptTimeoutMs defaults omission and enables only positive finite timeouts", () => {
   assert.equal(permissionPromptTimeoutMs(undefined), 600_000);

@@ -39,6 +39,7 @@ import {
   showPermissionPrompt,
   promptWriteBlock,
   warnIfAllDomainsAllowed,
+  warnIfLinuxUnenforcedGlobs,
 } from "./ui.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -127,6 +128,7 @@ export default function (pi: ExtensionAPI) {
       sandboxEnabled = true;
       sandboxInitialized = true;
       warnIfAllDomainsAllowed(ctx, config);
+      warnIfLinuxUnenforcedGlobs(ctx, config);
       updateStatus(ctx, config);
       return true;
     } catch (error) {

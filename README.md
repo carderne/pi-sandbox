@@ -66,6 +66,12 @@ path and domain arrays from both files are combined and deduplicated, so a
 project can add permissions without repeating the global configuration. Built-in
 defaults are used for an array only when neither file configures it.
 
+On Linux, glob patterns (`*`, `?`, `[...]`) in `allowWrite`/`denyWrite` cannot be
+enforced for bash commands (bubblewrap binds concrete paths only), so they are
+silently ignored there; use literal paths. A one-time warning is shown if your own
+config adds such globs (built-in defaults are excluded). Direct read/write/edit
+tools still honor globs on all platforms.
+
 Note below that the order of precedence for filesystem read and write are opposite.
 
 ```json
