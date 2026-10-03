@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { SandboxManager } from "@carderne/sandbox-runtime";
 import assert from "node:assert/strict";
 
-import { DEFAULT_CONFIG } from "../src/config.ts";
+import { DEFAULT_CONFIG, mergeConfigLayers } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
@@ -100,6 +100,39 @@ test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
   assert.equal(runtime.filesystem?.allowRead?.includes(canonicalizePath("/tmp")), true);
   assert.deepEqual(runtime.filesystem?.allowWrite, [canonicalizePath("/tmp")]);
   assert.deepEqual(runtime.filesystem?.denyWrite, ["*.key"]);
+});
+
+test("buildRuntimeConfig forwards denyMandatoryCwdFiles to the runtime", () => {
+  // The filesystem object is rebuilt field by field, so a config key that is
+  // not listed here is silently dropped before reaching the runtime.
+  // Not in the released runtime type until sandbox-runtime PR #21 lands.
+  type MandatoryCwdFlag = { denyMandatoryCwdFiles?: boolean };
+  const read = (fs: unknown) => (fs as MandatoryCwdFlag).denyMandatoryCwdFiles;
+
+  const optedOut = buildRuntimeConfig({
+    ...DEFAULT_CONFIG,
+    filesystem: { ...DEFAULT_CONFIG.filesystem!, denyMandatoryCwdFiles: false },
+  });
+  assert.equal(read(optedOut.filesystem), false);
+
+  const optedIn = buildRuntimeConfig({
+    ...DEFAULT_CONFIG,
+    filesystem: { ...DEFAULT_CONFIG.filesystem!, denyMandatoryCwdFiles: true },
+  });
+  assert.equal(read(optedIn.filesystem), true);
+
+  // Unset must stay unset so the runtime applies its own default.
+  const unset = buildRuntimeConfig(DEFAULT_CONFIG);
+  assert.equal(read(unset.filesystem), undefined);
+});
+
+test("denyMandatoryCwdFiles survives the config layer merge", () => {
+  const merged = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    { filesystem: { denyMandatoryCwdFiles: true } },
+    { filesystem: { denyMandatoryCwdFiles: false } },
+  );
+  assert.equal(merged.filesystem?.denyMandatoryCwdFiles, false);
 });
 
 test("buildRuntimeConfig exposes the bundled seccomp helper on Linux", () => {
