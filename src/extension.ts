@@ -84,15 +84,21 @@ export default function (pi: ExtensionAPI) {
     const { globalPath, projectPath } = getConfigPaths(cwd);
     const target = choice === "project" ? projectPath : globalPath;
 
-    if (kind === "domain") {
-      if (!allowances.domains.includes(value)) allowances.domains.push(value);
-      if (choice !== "session") addDomainToConfig(target, value);
-    } else if (kind === "read") {
-      if (!allowances.readPaths.includes(value)) allowances.readPaths.push(value);
-      if (choice !== "session") addReadPathToConfig(target, value);
-    } else {
-      if (!allowances.writePaths.includes(value)) allowances.writePaths.push(value);
-      if (choice !== "session") addWritePathToConfig(target, value);
+    try {
+      if (kind === "domain") {
+        if (!allowances.domains.includes(value)) allowances.domains.push(value);
+        if (choice !== "session") addDomainToConfig(target, value);
+      } else if (kind === "read") {
+        if (!allowances.readPaths.includes(value)) allowances.readPaths.push(value);
+        if (choice !== "session") addReadPathToConfig(target, value);
+      } else {
+        if (!allowances.writePaths.includes(value)) allowances.writePaths.push(value);
+        if (choice !== "session") addWritePathToConfig(target, value);
+      }
+    } catch (error) {
+      // The grant still applies for this session (allowances updated above);
+      // only persistence failed. Surface it instead of wiping the config.
+      console.error(`Warning: ${error instanceof Error ? error.message : error}`);
     }
     await refreshSandbox(cwd);
   }
