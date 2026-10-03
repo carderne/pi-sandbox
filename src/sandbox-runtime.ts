@@ -25,11 +25,11 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-const canonicalizeFilesystemPattern = (path: string) =>
-  path.includes("*") ? path : canonicalizePath(path);
+const canonicalizeFilesystemPattern = (path: string, baseCwd?: string) =>
+  path.includes("*") ? path : canonicalizePath(path, baseCwd);
 
-const canonicalizeFilesystemPatterns = (paths: string[]) =>
-  unique(paths.map(canonicalizeFilesystemPattern));
+const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
+  unique(paths.map((path) => canonicalizeFilesystemPattern(path, baseCwd)));
 
 function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
   if (platform !== "linux") return [];
@@ -64,6 +64,7 @@ export function buildRuntimeConfig(
   config: SandboxConfig,
   allowances?: SessionAllowances,
   platform: NodeJS.Platform = process.platform,
+  baseCwd: string = process.cwd(),
 ): SandboxRuntimeConfig {
   const effective = resolveAllowances(config, allowances);
 
@@ -90,13 +91,13 @@ export function buildRuntimeConfig(
     } as SandboxRuntimeConfig["network"],
     filesystem: {
       disabled: config.filesystem?.disabled,
-      denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? []),
-      allowRead: canonicalizeFilesystemPatterns([
-        ...effective.readPaths,
-        ...sandboxRuntimeReadPaths(platform),
-      ]),
-      allowWrite: canonicalizeFilesystemPatterns(effective.writePaths),
-      denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? []),
+      denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? [], baseCwd),
+      allowRead: canonicalizeFilesystemPatterns(
+        [...effective.readPaths, ...sandboxRuntimeReadPaths(platform)],
+        baseCwd,
+      ),
+      allowWrite: canonicalizeFilesystemPatterns(effective.writePaths, baseCwd),
+      denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? [], baseCwd),
       // Forwarded for @carderne/sandbox-runtime PR #21. The cast is only
       // needed until a released runtime type carries the field.
       denyMandatoryCwdFiles: config.filesystem?.denyMandatoryCwdFiles,
@@ -116,8 +117,9 @@ export async function initializeSandbox(
   manager: ISandboxManager,
   config: SandboxConfig,
   allowances?: SessionAllowances,
+  baseCwd: string = process.cwd(),
 ): Promise<void> {
-  const runtimeConfig = buildRuntimeConfig(config, allowances);
+  const runtimeConfig = buildRuntimeConfig(config, allowances, process.platform, baseCwd);
   // The runtime checks its live allowlist. Permission prompts happen before
   // execution; a callback capturing this initial list could re-allow removed domains.
   await manager.initialize(runtimeConfig);
@@ -127,10 +129,11 @@ export function updateSandboxConfig(
   manager: ISandboxManager,
   config: SandboxConfig,
   allowances: SessionAllowances,
+  baseCwd: string = process.cwd(),
 ): void {
   // Permission updates must not tear down the proxy used by concurrent commands.
   // Network rules apply immediately; new commands pick up filesystem rules when wrapped.
-  manager.updateConfig(buildRuntimeConfig(config, allowances));
+  manager.updateConfig(buildRuntimeConfig(config, allowances, process.platform, baseCwd));
 }
 
 export function supportsNodeEnvProxy(version: string): boolean {

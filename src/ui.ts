@@ -325,7 +325,7 @@ export function promptReadBlock(
     ctx,
     `📖 Read blocked: "${path}" is not in allowRead`,
     path,
-    (value) => validRule(value, matchesPattern(path, [value]), `path "${path}"`),
+    (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
     timeoutSeconds,
   );
 }
@@ -341,7 +341,7 @@ export function promptWriteBlock(
     ctx,
     `📝 Write blocked: "${path}" is not in allowWrite`,
     path,
-    (value) => validRule(value, matchesPattern(path, [value]), `path "${path}"`),
+    (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
     timeoutSeconds,
   );
 }

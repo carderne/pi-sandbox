@@ -70,7 +70,7 @@ export default function (pi: ExtensionAPI) {
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     try {
-      updateSandboxConfig(sandboxManager, loadConfig(cwd), allowances);
+      updateSandboxConfig(sandboxManager, loadConfig(cwd), allowances, cwd);
     } catch (error) {
       console.error(`Warning: Failed to update sandbox configuration: ${error}`);
     }
@@ -122,7 +122,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      await initializeSandbox(sandboxManager, config, allowances);
+      await initializeSandbox(sandboxManager, config, allowances, ctx.cwd);
       if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
         process.env.NODE_USE_ENV_PROXY ??= "1";
       }
@@ -215,12 +215,13 @@ export default function (pi: ExtensionAPI) {
         const blockedPath = extractBlockedWritePath(output);
 
         if (blockedPath) {
-          const path = canonicalizePath(blockedPath);
+          const path = canonicalizePath(blockedPath, ctx.cwd);
           const config = loadConfig(ctx.cwd);
           const writePermission = await resolveWritePermission({
             path,
             allowWrite: effectiveWritePaths(ctx.cwd),
             denyWrite: config.filesystem?.denyWrite ?? [],
+            baseCwd: ctx.cwd,
             prompt: (path) =>
               promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
             saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
@@ -312,8 +313,8 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (isToolCallEventType("read", event)) {
-      const path = canonicalizePath(event.input.path);
-      if (!matchesPattern(path, effectiveReadPaths(ctx.cwd))) {
+      const path = canonicalizePath(event.input.path, ctx.cwd);
+      if (!matchesPattern(path, effectiveReadPaths(ctx.cwd), ctx.cwd)) {
         const choice = await promptReadBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
         if (choice.action === "abort") {
           return { block: true, reason: `Sandbox: read access denied for "${path}"` };
@@ -324,11 +325,12 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
-      const path = canonicalizePath((event.input as { path: string }).path);
+      const path = canonicalizePath((event.input as { path: string }).path, ctx.cwd);
       const writePermission = await resolveWritePermission({
         path,
         allowWrite: effectiveWritePaths(ctx.cwd),
         denyWrite: config.filesystem?.denyWrite ?? [],
+        baseCwd: ctx.cwd,
         prompt: (path) => promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
         saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
       });
@@ -405,7 +407,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const target = kind === "domain" ? targetArg : canonicalizePath(targetArg);
+      const target = kind === "domain" ? targetArg : canonicalizePath(targetArg, ctx.cwd);
       const config = loadConfig(ctx.cwd);
       const configKey =
         kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
@@ -417,7 +419,9 @@ export default function (pi: ExtensionAPI) {
         (value) => {
           if (!value) return "Rule cannot be empty.";
           const matches =
-            kind === "domain" ? domainIsAllowed(target, [value]) : matchesPattern(target, [value]);
+            kind === "domain"
+              ? domainIsAllowed(target, [value])
+              : matchesPattern(target, [value], ctx.cwd);
           return matches ? null : `Rule must match "${target}".`;
         },
         config.permissionPromptTimeoutSeconds,

@@ -107,6 +107,24 @@ test("path patterns support directory prefixes and globs", () => {
   assert.equal(matchesPattern(join(root, "file.txt"), [join(root, "*.pem")]), false);
 });
 
+test("relative paths resolve against baseCwd, not process.cwd()", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-basecwd-"));
+  const project = canonicalizePath(root);
+
+  // "." and relative entries resolve against the passed baseCwd.
+  assert.equal(canonicalizePath(".", project), project);
+  assert.equal(canonicalizePath("sub/file", project), join(project, "sub", "file"));
+
+  // matchesPattern honors baseCwd for both the path and the pattern.
+  assert.equal(matchesPattern(join(project, "f.txt"), ["."], project), true);
+  assert.equal(matchesPattern("f.txt", ["."], project), true);
+  assert.equal(matchesPattern("f.txt", ["other"], project), false);
+
+  // decideWritePolicy threads baseCwd through to the pattern match.
+  assert.equal(decideWritePolicy("f.txt", ["."], [], project), "allow");
+  assert.equal(decideWritePolicy("f.txt", [], [], project), "prompt");
+});
+
 test("canonicalizes symlinks and nonexistent descendants", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-sandbox-canonical-"));
   const real = join(root, "real");
