@@ -21,8 +21,8 @@ importers:
   .:
     dependencies:
       '@carderne/sandbox-runtime':
-        specifier: ^0.0.75
-        version: 0.0.75
+        specifier: ^0.0.76
+        version: 0.0.76
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: ^0.80.0
@@ -158,8 +158,8 @@ packages:
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
-  '@carderne/sandbox-runtime@0.0.75':
-    resolution: {integrity: sha512-ZyZ3WvuLaM9nmrkw3zEx6wkeF8pnjnFlsMSnDicn6klzQ2xINRcPHoyx5hC8aShxDlagxoGmq2O6IHxCy1DJJw==}
+  '@carderne/sandbox-runtime@0.0.76':
+    resolution: {integrity: sha512-Ai0v8ee8FCybmFWCB/EYiv+g7hYjXYK2ni9oTYaTH3EFq2g4OGEpA0LyrdRKKv9HWw3WE+rxOYbQlhhmvWFwuw==}
     engines: {node: '>=20.11.0'}
     hasBin: true
 
@@ -1302,7 +1302,7 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@carderne/sandbox-runtime@0.0.75':
+  '@carderne/sandbox-runtime@0.0.76':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       commander: 12.1.0
