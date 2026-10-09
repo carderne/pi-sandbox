@@ -130,6 +130,7 @@ export function buildRuntimeConfig(
     allowBrowserProcess: config.allowBrowserProcess,
     allowPty: config.allowPty,
     enableWeakerNetworkIsolation: true,
+    allowAppleEvents: config.allowAppleEvents,
   };
 
   return runtimeConfig;

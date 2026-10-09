@@ -85,6 +85,12 @@ test("buildRuntimeConfig adds session allowances without mutating config", () =>
   assert.equal(DEFAULT_CONFIG.network?.allowedDomains?.includes("example.com"), false);
 });
 
+test("buildRuntimeConfig forwards allowAppleEvents to the runtime", () => {
+  assert.equal(buildRuntimeConfig(DEFAULT_CONFIG).allowAppleEvents, undefined);
+  const runtime = buildRuntimeConfig({ ...DEFAULT_CONFIG, allowAppleEvents: true });
+  assert.equal(runtime.allowAppleEvents, true);
+});
+
 function withSshAuthSock<T>(value: string | undefined, fn: () => T): T {
   const previous = process.env.SSH_AUTH_SOCK;
   if (value === undefined) delete process.env.SSH_AUTH_SOCK;
