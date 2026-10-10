@@ -25,7 +25,9 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-function resolveSshAgentSocketPath(sshAuthSock: string | undefined): string | undefined {
+function resolveSshAgentSocketPath(
+  sshAuthSock: string | undefined,
+): string | undefined {
   if (!sshAuthSock) return undefined;
   try {
     const resolved = realpathSync(sshAuthSock);
@@ -51,8 +53,17 @@ const canonicalizeFilesystemPattern = (path: string, baseCwd?: string) =>
 const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
   unique(paths.map((path) => canonicalizeFilesystemPattern(path, baseCwd)));
 
+const isPlatformLinuxOrAndroid = (platform: NodeJS.Platform) =>
+  platform === "linux" || platform === "android";
+
+export function supportsSandboxPlatform(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === "darwin" || isPlatformLinuxOrAndroid(platform) || false;
+}
+
 function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
-  if (platform !== "linux") return [];
+  if (!isPlatformLinuxOrAndroid(platform)) return [];
 
   // apply-seccomp executes inside the Bubblewrap namespace, so broad rules
   // such as denyRead: ["/home"] must not hide the runtime's bundled helper.
