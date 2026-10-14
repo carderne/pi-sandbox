@@ -384,24 +384,28 @@ export function warnIfLinuxUnenforcedGlobs(
   );
 }
 
-export function formatSandboxStatus(config: SandboxConfig): string {
+export function formatSandboxStatus(
+  config: SandboxConfig,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const networkLabel = allowsAllDomains(config.network?.allowedDomains)
     ? "all domains"
     : `${config.network?.allowedDomains?.length ?? 0} domains`;
-  return `🔒 Sandbox: ${networkLabel}, ${config.filesystem?.allowWrite?.length ?? 0} write paths${config.allowSerialDevices === true ? ", serial ON" : ""}`;
+  return `🔒 Sandbox: ${networkLabel}, ${config.filesystem?.allowWrite?.length ?? 0} write paths${platform === "linux" && config.allowSerialDevices === true ? ", serial ON" : ""}`;
 }
 
 export function formatSandboxConfiguration(
   config: SandboxConfig,
   paths: { globalPath: string; projectPath: string },
   allowances: SessionAllowances,
+  platform: NodeJS.Platform = process.platform,
 ): string {
   return [
     "Sandbox Configuration",
     `  Project config: ${paths.projectPath}`,
     `  Global config:  ${paths.globalPath}`,
     "",
-    `Serial devices (Linux bash + !cmd): ${config.allowSerialDevices === true ? "enabled" : "disabled"}`,
+    `Serial devices (Linux bash + !cmd): ${platform !== "linux" ? "unsupported" : config.allowSerialDevices === true ? "enabled" : "disabled"}`,
     "",
     "Network (bash + !cmd):",
     `  Allowed domains: ${config.network?.allowedDomains?.join(", ") || "(none)"}`,

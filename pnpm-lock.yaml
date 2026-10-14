@@ -18,7 +18,7 @@ overrides:
 
 patchedDependencies:
   '@carderne/sandbox-runtime@0.0.76':
-    hash: d6b771b12cbda9c288d53239d272ef1698598271b59dd2c5a054af985b12be62
+    hash: 6dff17be9d400420d065273483de24b5768ec475b2d3402f3caf6ba6cf21f771
     path: patches/@carderne__sandbox-runtime@0.0.76.patch
 
 importers:
@@ -27,7 +27,7 @@ importers:
     dependencies:
       '@carderne/sandbox-runtime':
         specifier: ^0.0.76
-        version: 0.0.76(patch_hash=d6b771b12cbda9c288d53239d272ef1698598271b59dd2c5a054af985b12be62)
+        version: 0.0.76(patch_hash=6dff17be9d400420d065273483de24b5768ec475b2d3402f3caf6ba6cf21f771)
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: ^0.80.0
@@ -1307,7 +1307,7 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@carderne/sandbox-runtime@0.0.76(patch_hash=d6b771b12cbda9c288d53239d272ef1698598271b59dd2c5a054af985b12be62)':
+  '@carderne/sandbox-runtime@0.0.76(patch_hash=6dff17be9d400420d065273483de24b5768ec475b2d3402f3caf6ba6cf21f771)':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       commander: 12.1.0

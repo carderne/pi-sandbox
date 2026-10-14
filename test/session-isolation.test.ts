@@ -134,14 +134,23 @@ test(
       current.bash("touch /usr/pi-sandbox-serial-test"),
       /Read-only file system|Permission denied/,
     );
-    const links = await current.bash("find /dev/serial/by-id -type l 2>/dev/null");
-    assert.match(links, /\/dev\/serial\/by-id\//);
-    assert.equal(
-      await current.bash(
-        'for p in /dev/serial/by-id/*; do test -c "$p" || exit 1; done; printf valid',
-      ),
-      "valid",
-    );
+    for (const directory of ["/dev/serial/by-id", "/dev/serial/by-path"]) {
+      let entries: string[];
+      try {
+        entries = readdirSync(directory);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      for (const name of entries) {
+        const link = join(directory, name);
+        if (!devices.some((device) => realpathSync(link) === `/dev/${device}`)) continue;
+        assert.equal(
+          await current.bash(`test -c ${JSON.stringify(link)} && printf valid`),
+          "valid",
+        );
+      }
+    }
     await current.command("sandbox-serial", "off");
     assert.equal(await current.bash(visible), "hidden");
     writeFileSync(configPath, JSON.stringify({ ...config, allowSerialDevices: true }));

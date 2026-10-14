@@ -57,14 +57,22 @@ index 30328acf3a742c0af5cc0f157b4958323204197b..fe13b72ba596bd5b709c8a98540c0514
          .boolean()
          .optional()
 diff --git a/dist/sandbox/sandbox-manager.js b/dist/sandbox/sandbox-manager.js
-index 25531571209459b2ebdf6b09797da8b537c2a201..b0eca481ab9157158ab4b525cdf32a555be77128 100644
+index 25531571209459b2ebdf6b09797da8b537c2a201..c3255998746a6337a863ec6c30582165fcd94e0e 100644
 --- a/dist/sandbox/sandbox-manager.js
 +++ b/dist/sandbox/sandbox-manager.js
-@@ -1105,6 +1105,7 @@ function createManager(legacySingleton) {
+@@ -936,6 +936,7 @@ function createManager(legacySingleton) {
+         return managerContext !== undefined;
+     }
+     async function wrapWithSandbox(command, binShell, customConfig, abortSignal) {
++        const allowSerialDevices = config?.allowSerialDevices === true;
+         const platform = getPlatform();
+         // filesystem.disabled bypasses ALL filesystem rule generation. Both
+         // platform wrappers treat readConfig/writeConfig === undefined as "no
+@@ -1105,6 +1106,7 @@ function createManager(legacySingleton) {
                      maskedFileBinds: credentialRestrictions.maskedFileBinds,
                      maskedFileStoreDir: credentialRestrictions.maskedFileStoreDir,
                      enableWeakerNestedSandbox: getEnableWeakerNestedSandbox(),
-+                    allowSerialDevices: config?.allowSerialDevices === true,
++                    allowSerialDevices,
                      allowAllUnixSockets: getAllowAllUnixSockets(),
                      binShell,
                      ripgrepConfig: getRipgrepConfig(),

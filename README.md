@@ -158,7 +158,9 @@ that release has no device-passthrough API. To develop/use this version, run
 `pnpm install --frozen-lockfile` in the checkout and load its `index.ts` as a local
 extension. Do not also load the installed upstream pi-sandbox extension. A plain
 npm install or publishing this extension alone does **not** apply the pnpm runtime
-patch; upstream runtime support is required before npm distribution.
+patch; upstream runtime support is required before npm distribution. A
+`prepublishOnly` guard blocks publication until that dependency is replaced.
+Unsupported platforms show serial access as unsupported, not enabled.
 
 ## What it does
 

@@ -17,15 +17,35 @@ import {
 test("sandbox UI displays effective serial access and preserves the lock indicator", () => {
   assert.match(formatSandboxStatus(DEFAULT_CONFIG), /^\u{1F512} Sandbox:/u);
   assert.doesNotMatch(formatSandboxStatus(DEFAULT_CONFIG), /serial ON/);
-  assert.match(formatSandboxStatus({ ...DEFAULT_CONFIG, allowSerialDevices: true }), /serial ON/);
+  assert.match(
+    formatSandboxStatus({ ...DEFAULT_CONFIG, allowSerialDevices: true }, "linux"),
+    /serial ON/,
+  );
   const display = (enabled: boolean) =>
     formatSandboxConfiguration(
       { ...DEFAULT_CONFIG, allowSerialDevices: enabled },
       { globalPath: "/global", projectPath: "/project" },
       { domains: [], readPaths: [], writePaths: [] },
+      "linux",
     );
   assert.match(display(true), /Serial devices.*enabled/);
   assert.match(display(false), /Serial devices.*disabled/);
+});
+
+test("unsupported platforms never display serial access as enabled", () => {
+  for (const platform of ["darwin", "win32"] as const) {
+    const config = { ...DEFAULT_CONFIG, allowSerialDevices: true };
+    assert.doesNotMatch(formatSandboxStatus(config, platform), /serial ON/);
+    assert.match(
+      formatSandboxConfiguration(
+        config,
+        { globalPath: "/global", projectPath: "/project" },
+        { domains: [], readPaths: [], writePaths: [] },
+        platform,
+      ),
+      /Serial devices.*unsupported/,
+    );
+  }
 });
 
 test("warnIfLinuxUnenforcedGlobs warns only for user-supplied write globs on Linux", () => {
