@@ -16,6 +16,8 @@ export type SandboxConfig = Omit<SandboxRuntimeConfig, "network" | "filesystem">
   filesystem?: NonNullable<SandboxRuntimeConfig["filesystem"]> & {
     denyMandatoryCwdFiles?: boolean;
   };
+  /** Opt-in ttyACM/ttyUSB passthrough for Linux bash commands. */
+  allowSerialDevices?: boolean;
   enabled?: boolean;
   sandboxUserShell?: boolean;
   permissionPromptTimeoutSeconds?: number;
@@ -52,6 +54,7 @@ export const DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS = 10 * 60;
 
 export const DEFAULT_CONFIG: SandboxConfig = {
   enabled: true,
+  allowSerialDevices: false,
   sandboxUserShell: true,
   permissionPromptTimeoutSeconds: DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
   network: {

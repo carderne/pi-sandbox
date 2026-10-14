@@ -102,7 +102,7 @@ export function buildRuntimeConfig(
     ...networkConfig
   } = config.network ?? {};
 
-  const runtimeConfig: SandboxRuntimeConfig = {
+  const runtimeConfig: SandboxRuntimeConfig & { allowSerialDevices?: boolean } = {
     network: {
       ...networkConfig,
       // Omit allowedDomains when disabled; the runtime treats `undefined` as
@@ -129,6 +129,7 @@ export function buildRuntimeConfig(
     enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
     allowBrowserProcess: config.allowBrowserProcess,
     allowPty: config.allowPty,
+    allowSerialDevices: platform === "linux" && config.allowSerialDevices === true,
     enableWeakerNetworkIsolation: true,
     allowAppleEvents: config.allowAppleEvents,
   };

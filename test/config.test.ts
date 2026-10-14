@@ -24,6 +24,19 @@ test("omitted settings use their defaults", () => {
   assert.equal(merged.permissionPromptTimeoutSeconds, DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS);
   assert.equal(merged.sandboxUserShell, true);
   assert.equal(merged.network?.allowSSHAgentSocket, undefined);
+  assert.equal(merged.allowSerialDevices, false);
+});
+
+test("serial JSON setting follows scalar project precedence", () => {
+  assert.equal(
+    mergeConfigLayers(DEFAULT_CONFIG, { allowSerialDevices: true }, {}).allowSerialDevices,
+    true,
+  );
+  assert.equal(
+    mergeConfigLayers(DEFAULT_CONFIG, { allowSerialDevices: true }, { allowSerialDevices: false })
+      .allowSerialDevices,
+    false,
+  );
 });
 
 test("mergeConfigLayers combines configured arrays and deduplicates entries", () => {

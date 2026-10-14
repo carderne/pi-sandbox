@@ -5,12 +5,28 @@ import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
+  formatSandboxStatus,
+  formatSandboxConfiguration,
   permissionOptions,
   permissionPromptRemainingSeconds,
   permissionPromptTimeoutMs,
   showPermissionPrompt,
   warnIfLinuxUnenforcedGlobs,
 } from "../src/ui.ts";
+
+test("sandbox UI displays effective serial access and preserves the lock indicator", () => {
+  assert.match(formatSandboxStatus(DEFAULT_CONFIG), /^\u{1F512} Sandbox:/u);
+  assert.doesNotMatch(formatSandboxStatus(DEFAULT_CONFIG), /serial ON/);
+  assert.match(formatSandboxStatus({ ...DEFAULT_CONFIG, allowSerialDevices: true }), /serial ON/);
+  const display = (enabled: boolean) =>
+    formatSandboxConfiguration(
+      { ...DEFAULT_CONFIG, allowSerialDevices: enabled },
+      { globalPath: "/global", projectPath: "/project" },
+      { domains: [], readPaths: [], writePaths: [] },
+    );
+  assert.match(display(true), /Serial devices.*enabled/);
+  assert.match(display(false), /Serial devices.*disabled/);
+});
 
 test("warnIfLinuxUnenforcedGlobs warns only for user-supplied write globs on Linux", () => {
   const warnings: string[] = [];
@@ -74,7 +90,9 @@ test("permissionPromptRemainingSeconds rounds up and stops at zero", () => {
 test(
   "showPermissionPrompt safely aborts when its timeout expires",
   { timeout: 1_000 },
-  async () => {
+  async (t) => {
+    // Freeze the countdown clock; real timers still exercise auto-abort.
+    t.mock.method(Date, "now", () => 10_000);
     type TestComponent = { render(width: number): string[]; dispose?(): void };
     type PromptFactory<T> = (
       tui: { requestRender(): void },

@@ -1,2 +1,5 @@
+patchedDependencies:
+  "@carderne/sandbox-runtime@0.0.76": patches/@carderne__sandbox-runtime@0.0.76.patch
+
 minimumReleaseAgeExclude:
   - "@carderne/sandbox-runtime"

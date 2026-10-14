@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +13,7 @@ type Handler = (event: any, ctx: ExtensionContext) => any;
 
 function session(cwd: string, projectTrusted = true) {
   const handlers = new Map<string, Handler>();
+  const commands = new Map<string, Handler>();
   let bash: Parameters<ExtensionAPI["registerTool"]>[0] | undefined;
   const errors: string[] = [];
   const api = {
@@ -22,7 +23,8 @@ function session(cwd: string, projectTrusted = true) {
     },
     registerFlag: () => {},
     registerShortcut: () => {},
-    registerCommand: () => {},
+    registerCommand: (name: string, command: { handler: Handler }) =>
+      commands.set(name, command.handler),
     getFlag: () => false,
   } as unknown as ExtensionAPI;
   const ctx = {
@@ -39,6 +41,9 @@ function session(cwd: string, projectTrusted = true) {
   } as unknown as ExtensionContext;
   extension(api);
   return {
+    async command(name: string, args: string) {
+      await commands.get(name)!(args, ctx);
+    },
     async start() {
       await handlers.get("session_start")!({ reason: "startup" }, ctx);
       assert.deepEqual(errors, []);
@@ -75,6 +80,80 @@ function session(cwd: string, projectTrusted = true) {
     },
   };
 }
+
+test(
+  "Linux serial JSON and session overrides preserve other sandbox restrictions",
+  {
+    skip: process.platform !== "linux",
+    timeout: 30_000,
+  },
+  async (t) => {
+    const devices = readdirSync("/dev").filter((name) => /^tty(?:ACM|USB)\d+$/.test(name));
+    if (!devices.length) {
+      t.skip("Requires an attached serial board (visibility only; ports are never opened)");
+      return;
+    }
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-serial-"));
+    const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    const configPath = join(process.env.PI_CODING_AGENT_DIR, "sandbox.json");
+    const config = {
+      enabled: true,
+      allowSerialDevices: false,
+      network: { allowedDomains: [], deniedDomains: [] },
+      filesystem: { denyRead: [], allowRead: [], allowWrite: [root], denyWrite: [] },
+    };
+    writeFileSync(configPath, JSON.stringify(config));
+    const current = session(root);
+    t.after(async () => {
+      await current.shutdown();
+      if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    });
+    await current.start();
+    const visible = `test -c /dev/${devices[0]} && printf visible || printf hidden`;
+    assert.equal(await current.bash(visible), "hidden");
+    await current.command("sandbox-serial", "on");
+    assert.equal(await current.bash(visible), "visible");
+    assert.equal(await current.userBash(visible), "visible");
+    assert.equal(
+      await current.bash("test -e /dev/bus/usb && printf exposed || printf hidden"),
+      "hidden",
+    );
+    assert.equal(
+      await current.bash("test -e /dev/nvme0n1 && printf exposed || printf hidden"),
+      "hidden",
+    );
+    assert.equal(
+      await current.bash("grep -Ec '^ *(eth|en|wl)[^:]*:' /proc/net/dev || true"),
+      "0\n",
+    );
+    await assert.rejects(
+      current.bash("touch /usr/pi-sandbox-serial-test"),
+      /Read-only file system|Permission denied/,
+    );
+    const links = await current.bash("find /dev/serial/by-id -type l 2>/dev/null");
+    assert.match(links, /\/dev\/serial\/by-id\//);
+    assert.equal(
+      await current.bash(
+        'for p in /dev/serial/by-id/*; do test -c "$p" || exit 1; done; printf valid',
+      ),
+      "valid",
+    );
+    await current.command("sandbox-serial", "off");
+    assert.equal(await current.bash(visible), "hidden");
+    writeFileSync(configPath, JSON.stringify({ ...config, allowSerialDevices: true }));
+    assert.equal(await current.bash(visible), "hidden", "session off overrides JSON true");
+    await current.command("sandbox-serial", "reset");
+    assert.equal(await current.bash(visible), "visible", "reset follows JSON true");
+    await current.command("sandbox-serial", "invalid");
+    assert.equal(await current.bash(visible), "visible", "invalid command leaves state intact");
+    writeFileSync(configPath, JSON.stringify(config));
+    assert.equal(await current.bash(visible), "hidden", "JSON changes apply to new commands");
+  },
+);
 
 test("bash executes in the session working directory", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "pi-sandbox-cwd-"));

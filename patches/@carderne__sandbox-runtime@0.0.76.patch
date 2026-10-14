@@ -1,0 +1,70 @@
+diff --git a/dist/sandbox/linux-sandbox-utils.js b/dist/sandbox/linux-sandbox-utils.js
+index 9f57df50e60288c5603476ff9936815b88450821..9c2e4be5a319422d36768ecedd444a15da914a44 100644
+--- a/dist/sandbox/linux-sandbox-utils.js
++++ b/dist/sandbox/linux-sandbox-utils.js
+@@ -1225,6 +1225,41 @@ export async function wrapCommandWithSandboxLinux(params) {
+         bwrapArgs.push(...fsArgs);
+         // Always bind /dev
+         bwrapArgs.push('--dev', '/dev');
++        // Opt-in serial access only; never bind the whole host /dev or raw USB.
++        if (params.allowSerialDevices === true) {
++            const serialNodes = new Set();
++            for (const name of fs.readdirSync('/dev')) {
++                if (!/^tty(?:ACM|USB)\d+$/.test(name)) continue;
++                const device = `/dev/${name}`;
++                try {
++                    if (!fs.lstatSync(device).isCharacterDevice()) continue;
++                } catch (error) {
++                    if (error.code === 'ENOENT') continue;
++                    throw error;
++                }
++                serialNodes.add(device);
++                bwrapArgs.push('--dev-bind-try', device, device);
++            }
++            for (const directory of ['/dev/serial/by-id', '/dev/serial/by-path']) {
++                let entries;
++                try { entries = fs.readdirSync(directory); }
++                catch (error) {
++                    if (error.code === 'ENOENT') continue;
++                    throw error;
++                }
++                for (const name of entries) {
++                    const link = join(directory, name);
++                    try {
++                        if (!fs.lstatSync(link).isSymbolicLink()) continue;
++                        const target = fs.realpathSync(link);
++                        if (serialNodes.has(target)) bwrapArgs.push('--symlink', target, link);
++                    } catch (error) {
++                        if (error.code === 'ENOENT') continue;
++                        throw error;
++                    }
++                }
++            }
++        }
+         // ========== PID NAMESPACE ISOLATION ==========
+         // IMPORTANT: These must come AFTER filesystem binds for nested bwrap to work
+         // By default, always unshare PID namespace and mount fresh /proc.
+diff --git a/dist/sandbox/sandbox-config.js b/dist/sandbox/sandbox-config.js
+index 30328acf3a742c0af5cc0f157b4958323204197b..fe13b72ba596bd5b709c8a98540c0514caa041a8 100644
+--- a/dist/sandbox/sandbox-config.js
++++ b/dist/sandbox/sandbox-config.js
+@@ -770,6 +770,7 @@ export const SandboxRuntimeConfigSchema = z
+         .optional()
+         .describe('Maximum directory depth to search for dangerous files on Linux (default: 3). ' +
+         'Higher values provide more protection but slower performance.'),
++    allowSerialDevices: z.boolean().optional().describe('Allow host ttyACM/ttyUSB serial devices (Linux only; default false).'),
+     allowPty: z
+         .boolean()
+         .optional()
+diff --git a/dist/sandbox/sandbox-manager.js b/dist/sandbox/sandbox-manager.js
+index 25531571209459b2ebdf6b09797da8b537c2a201..b0eca481ab9157158ab4b525cdf32a555be77128 100644
+--- a/dist/sandbox/sandbox-manager.js
++++ b/dist/sandbox/sandbox-manager.js
+@@ -1105,6 +1105,7 @@ function createManager(legacySingleton) {
+                     maskedFileBinds: credentialRestrictions.maskedFileBinds,
+                     maskedFileStoreDir: credentialRestrictions.maskedFileStoreDir,
+                     enableWeakerNestedSandbox: getEnableWeakerNestedSandbox(),
++                    allowSerialDevices: config?.allowSerialDevices === true,
+                     allowAllUnixSockets: getAllowAllUnixSockets(),
+                     binShell,
+                     ripgrepConfig: getRipgrepConfig(),
