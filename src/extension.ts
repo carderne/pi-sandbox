@@ -176,8 +176,26 @@ export default function (pi: ExtensionAPI) {
     if (await enableSandbox(ctx, false)) ctx.ui.notify("Sandbox enabled", "info");
   }
 
+  const sandboxDescription =
+    "Commands run inside an OS-level sandbox. When something fails, the sandbox may " +
+    "be the cause. The sandbox restricts network access and filesystem reads and writes. " +
+    "It often prompts the user to grant access, but some restrictions do not trigger a " +
+    "prompt. If access is blocked without a prompt, ask the user manually.";
+
+  const macosDescription =
+    "The sandbox blocks commands that use setuid/setgid permissions, such as `ps`, " +
+    "even for read-only operations. The user cannot unblock these commands through " +
+    "sandbox permissions.";
+
+  const description = [
+    localBash.description,
+    sandboxDescription,
+    process.platform === "darwin" ? macosDescription : [],
+  ].join("\n\n");
+
   pi.registerTool({
     ...localBash,
+    description,
     label: "bash (sandboxed)",
     async execute(id, params, signal, onUpdate, ctx) {
       const runBash = () => {
