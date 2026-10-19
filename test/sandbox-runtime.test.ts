@@ -85,6 +85,19 @@ test("buildRuntimeConfig adds session allowances without mutating config", () =>
   assert.equal(DEFAULT_CONFIG.network?.allowedDomains?.includes("example.com"), false);
 });
 
+test("serial passthrough is Linux-only and requires literal true", () => {
+  const serial = (config: typeof DEFAULT_CONFIG, platform: NodeJS.Platform) =>
+    (buildRuntimeConfig(config, undefined, platform) as { allowSerialDevices?: boolean })
+      .allowSerialDevices;
+  assert.equal(serial(DEFAULT_CONFIG, "linux"), false);
+  assert.equal(serial({ ...DEFAULT_CONFIG, allowSerialDevices: true }, "linux"), true);
+  assert.equal(serial({ ...DEFAULT_CONFIG, allowSerialDevices: true }, "darwin"), false);
+  assert.equal(
+    serial({ ...DEFAULT_CONFIG, allowSerialDevices: "true" as unknown as boolean }, "linux"),
+    false,
+  );
+});
+
 test("buildRuntimeConfig forwards allowAppleEvents to the runtime", () => {
   assert.equal(buildRuntimeConfig(DEFAULT_CONFIG).allowAppleEvents, undefined);
   const runtime = buildRuntimeConfig({ ...DEFAULT_CONFIG, allowAppleEvents: true });

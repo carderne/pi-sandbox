@@ -3,6 +3,7 @@
 Sandbox for [pi](https://pi.dev/).
 
 Sandboxes pi like this:
+
 - read/write/edit: direct control using allow/deny lists
 - bash: uses [`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime) to control network and file system access
 
@@ -12,6 +13,7 @@ prompted to allow it temporarily or permanently rather than silently failing.
 ![demo](./demo/demo.gif)
 
 ## Notes
+
 There is an example config at [sandbox.json](./sandbox.json). It was quite a few things added to get this extension to work with [agent-browser](https://agent-browser.dev/) and other common tools.
 
 These open significant security loopholes, so shouldn't be used in a sensitive context or when you don't need browser support.
@@ -38,14 +40,14 @@ Sandbox initialization failed: Sandbox dependencies not available: ripgrep (rg) 
 
 Install ripgrep before enabling the extension:
 
-| Platform | Install |
-|---|---|
-| macOS (Homebrew) | `brew install ripgrep` |
-| macOS (MacPorts) | `sudo port install ripgrep` |
-| Linux (Debian/Ubuntu) | `sudo apt install ripgrep` |
-| Linux (Fedora/RHEL) | `sudo dnf install ripgrep` |
-| Linux (Arch) | `sudo pacman -S ripgrep` |
-| From source / other | <https://github.com/BurntSushi/ripgrep#installation> |
+| Platform              | Install                                              |
+| --------------------- | ---------------------------------------------------- |
+| macOS (Homebrew)      | `brew install ripgrep`                               |
+| macOS (MacPorts)      | `sudo port install ripgrep`                          |
+| Linux (Debian/Ubuntu) | `sudo apt install ripgrep`                           |
+| Linux (Fedora/RHEL)   | `sudo dnf install ripgrep`                           |
+| Linux (Arch)          | `sudo pacman -S ripgrep`                             |
+| From source / other   | <https://github.com/BurntSushi/ripgrep#installation> |
 
 If `which rg` succeeds in your shell but pi still reports `rg not
 found`, pi is being launched from a parent process whose `PATH` does
@@ -55,11 +57,13 @@ inherit a minimal non-login `PATH`). On macOS, `/opt/homebrew/bin` and
 environment includes whichever one your install uses.
 
 #### Install
+
 ```bash
 pi install npm:pi-sandbox
 ```
 
 #### Configure
+
 Add a config like this either to Pi's global agent directory (by default, `~/.pi/agent/sandbox.json`; respects `PI_CODING_AGENT_DIR`) or to `.pi/sandbox.json` (local).
 The local config is loaded only when Pi trusts the project. Scalar settings in the local config take precedence over global settings. The
 path and domain arrays from both files are combined and deduplicated, so a
@@ -77,14 +81,15 @@ Note below that the order of precedence for filesystem read and write are opposi
 ```json
 {
   "enabled": true,
-  "sandboxUserShell": false,       // Sandbox commands entered with `!`. Defaults to true
+  "allowSerialDevices": false, // Linux: opt-in ttyACM/ttyUSB access; default false
+  "sandboxUserShell": false, // Sandbox commands entered with `!`. Defaults to true
   "permissionPromptTimeoutSeconds": 600, // Defaults to 10 minutes; 0 waits indefinitely
-  "allowBrowserProcess": true,     // If you want to use agent-browser or similar Chrome setup
+  "allowBrowserProcess": true, // If you want to use agent-browser or similar Chrome setup
   "network": {
-    "allowLocalBinding": true,     // ditto
-    "allowAllUnixSockets": true,   // ditto
+    "allowLocalBinding": true, // ditto
+    "allowAllUnixSockets": true, // ditto
     "allowUnauthenticatedSocksProxy": true, // Enables Git-over-SSH on macOS
-    "disabled": false,             // Set true for direct network access (no proxy/--unshare-net) while keeping filesystem sandboxing
+    "disabled": false, // Set true for direct network access (no proxy/--unshare-net) while keeping filesystem sandboxing
     "allowSSHAgentSocket": true, // Allow the current SSH agent socket (macOS SSH commit signing)
     "allowedDomains": ["github.com", "*.github.com"],
     "deniedDomains": []
@@ -115,10 +120,47 @@ Alt+S                            toggle sandboxing on/off for the session
 /sandbox                         show current configuration and session allowances
 /sandbox-enable                  enable the sandbox for this session
 /sandbox-disable                 disable the sandbox for this session
+/sandbox-serial on               allow attached Linux serial boards for this session
+/sandbox-serial off              hide serial boards for newly launched commands
+/sandbox-serial reset            use the allowSerialDevices value from JSON
 /sandbox-allow domain <url>      prompt to add a domain to allowedDomains
 /sandbox-allow read <path>       prompt to add a path to allowRead
 /sandbox-allow write <path>      prompt to add a path to allowWrite
 ```
+
+### Linux serial boards
+
+Set `"allowSerialDevices": true` at the top level of `~/.pi/agent/sandbox.json`
+(or `.pi/sandbox.json` in a trusted project) to expose attached `/dev/ttyACM*`
+and `/dev/ttyUSB*` character devices to sandboxed bash and `!` commands. The
+setting defaults to `false`; a project scalar overrides the global value.
+Only the literal JSON boolean `true` grants access. Raw USB (`/dev/bus/usb`),
+disks, and the rest of the host `/dev` are not exposed by this option.
+`/dev/serial/by-id/` and `/dev/serial/by-path/` links are recreated only for the
+selected serial devices. Filesystem and network sandbox restrictions remain active.
+
+**Security:** this grants read/write and ioctl access to **all attached ACM/USB
+serial boards**, not just a single board. Commands may communicate with, reset,
+or flash them. It is not a read-only mode. Normal host permissions still apply;
+no privileges are elevated. The explicit device grant is separate from ordinary
+filesystem allow/deny rules, which do not filter these passthrough devices.
+Direct read/write/edit tools retain their existing filesystem policy.
+
+`/sandbox-serial on|off` overrides JSON for this session only; `reset` removes the
+override. JSON is reread before new commands, and devices are rediscovered when
+a command is wrapped. Changes do not revoke access from running commands. After
+unplugging/reconnecting a board, start a new command to pick up the new node.
+The toggle is Linux-only and does not enable the sandbox if it is disabled.
+`/sandbox` shows the effective setting; the footer marks enabled serial access.
+
+This checkout includes a pnpm patch for `@carderne/sandbox-runtime@0.0.76` because
+that release has no device-passthrough API. To develop/use this version, run
+`pnpm install --frozen-lockfile` in the checkout and load its `index.ts` as a local
+extension. Do not also load the installed upstream pi-sandbox extension. A plain
+npm install or publishing this extension alone does **not** apply the pnpm runtime
+patch; upstream runtime support is required before npm distribution. A
+`prepublishOnly` guard blocks publication until that dependency is replaced.
+Unsupported platforms show serial access as unsupported, not enabled.
 
 ## What it does
 
@@ -153,13 +195,13 @@ consistently.
 
 ### What is prompted vs. hard-blocked
 
-| Rule | Behaviour |
-|------|-----------|
-| Domain not in `allowedDomains` | Prompted (bash and `!cmd`, unless `sandboxUserShell` is disabled) |
-| Path not in `allowRead` or `allowWrite` | Prompted (read tool); granting adds to `allowRead` |
-| Path not in `allowWrite` | Prompted (write/edit tools and bash write failures) |
-| Path in `denyWrite` | Hard-blocked, no prompt |
-| Domain in `deniedDomains` | Hard-blocked at OS level, no prompt |
+| Rule                                    | Behaviour                                                         |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| Domain not in `allowedDomains`          | Prompted (bash and `!cmd`, unless `sandboxUserShell` is disabled) |
+| Path not in `allowRead` or `allowWrite` | Prompted (read tool); granting adds to `allowRead`                |
+| Path not in `allowWrite`                | Prompted (write/edit tools and bash write failures)               |
+| Path in `denyWrite`                     | Hard-blocked, no prompt                                           |
+| Domain in `deniedDomains`               | Hard-blocked at OS level, no prompt                               |
 
 If a path is added to `allowWrite` via a prompt but is also present in
 `denyWrite`, it remains blocked. A warning is shown explaining which config
@@ -207,6 +249,7 @@ entries are used, so an explicit empty array disables that default.
 The footer shows a lock indicator while the sandbox is active.
 
 ## Ackowledgements
+
 Based on code from
 [badlogic/pi-mono](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/examples/extensions/sandbox/index.ts)
 by Mario Zechner, used under the

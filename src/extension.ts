@@ -12,7 +12,7 @@ import {
   addReadPathToConfig,
   addWritePathToConfig,
   getConfigPaths,
-  loadConfig,
+  loadConfig as loadSavedConfig,
 } from "./config.ts";
 import {
   canonicalizePath,
@@ -58,6 +58,13 @@ export default function (pi: ExtensionAPI) {
   let sandboxEnabled = false;
   let sandboxInitialized = false;
   let projectTrusted = false;
+  let serialOverride: boolean | undefined;
+  const loadConfig = (cwd: string, trusted: boolean) => {
+    const config = loadSavedConfig(cwd, trusted);
+    return serialOverride === undefined
+      ? config
+      : { ...config, allowSerialDevices: serialOverride };
+  };
   const allowances: SessionAllowances = { domains: [], readPaths: [], writePaths: [] };
 
   const effectiveAllowances = (cwd: string) =>
@@ -181,6 +188,11 @@ export default function (pi: ExtensionAPI) {
     label: "bash (sandboxed)",
     async execute(id, params, signal, onUpdate, ctx) {
       const runBash = () => {
+        if (sandboxEnabled && sandboxInitialized) {
+          const config = loadConfig(ctx.cwd, projectTrusted);
+          updateSandboxConfig(sandboxManager, config, allowances, ctx.cwd);
+          updateStatus(ctx, config);
+        }
         const settings = SettingsManager.create(ctx.cwd, undefined, { projectTrusted });
         const userShellPath = settings.getShellPath();
         return createBashToolDefinition(ctx.cwd, {
@@ -288,6 +300,9 @@ export default function (pi: ExtensionAPI) {
         await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
       }
     }
+    const effectiveConfig = loadConfig(ctx.cwd, projectTrusted);
+    updateSandboxConfig(sandboxManager, effectiveConfig, allowances, ctx.cwd);
+    updateStatus(ctx, effectiveConfig);
     return {
       operations: createSandboxedBashOps(
         sandboxManager,
@@ -405,6 +420,42 @@ export default function (pi: ExtensionAPI) {
     description: "Disable the sandbox for this session",
     handler: async (_args, ctx) => {
       if (await disableSandbox(ctx)) ctx.ui.notify("Sandbox disabled", "info");
+    },
+  });
+
+  pi.registerCommand("sandbox-serial", {
+    description: "Set serial-device access for this session: on, off, or reset to JSON config",
+    handler: async (args, ctx) => {
+      if (process.platform !== "linux") {
+        ctx.ui.notify("Serial-device passthrough is supported only on Linux", "warning");
+        return;
+      }
+      const value = args.trim();
+      if (!["on", "off", "reset"].includes(value)) {
+        ctx.ui.notify("Usage: /sandbox-serial <on|off|reset>", "error");
+        return;
+      }
+      const next = value === "reset" ? undefined : value === "on";
+      const config = loadSavedConfig(ctx.cwd, projectTrusted);
+      const effective = { ...config, allowSerialDevices: next ?? config.allowSerialDevices };
+      try {
+        if (sandboxInitialized) updateSandboxConfig(sandboxManager, effective, allowances, ctx.cwd);
+      } catch (error) {
+        ctx.ui.notify(`Failed to update serial access: ${error}`, "error");
+        return;
+      }
+      serialOverride = next;
+      if (sandboxEnabled) updateStatus(ctx, effective);
+      ctx.ui.notify(
+        `Sandbox serial access ${effective.allowSerialDevices === true ? "enabled" : "disabled"}` +
+          (next === undefined ? " (JSON config)" : " (session override)") +
+          ". Applies to new commands only; host device permissions still apply." +
+          (effective.allowSerialDevices === true
+            ? " Commands can read, write, reset, or flash attached serial boards."
+            : "") +
+          (!sandboxEnabled ? " The sandbox itself is currently disabled." : ""),
+        effective.allowSerialDevices === true ? "warning" : "info",
+      );
     },
   });
 

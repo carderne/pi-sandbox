@@ -5,12 +5,48 @@ import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
+  formatSandboxStatus,
+  formatSandboxConfiguration,
   permissionOptions,
   permissionPromptRemainingSeconds,
   permissionPromptTimeoutMs,
   showPermissionPrompt,
   warnIfLinuxUnenforcedGlobs,
 } from "../src/ui.ts";
+
+test("sandbox UI displays effective serial access and preserves the lock indicator", () => {
+  assert.match(formatSandboxStatus(DEFAULT_CONFIG), /^\u{1F512} Sandbox:/u);
+  assert.doesNotMatch(formatSandboxStatus(DEFAULT_CONFIG), /serial ON/);
+  assert.match(
+    formatSandboxStatus({ ...DEFAULT_CONFIG, allowSerialDevices: true }, "linux"),
+    /serial ON/,
+  );
+  const display = (enabled: boolean) =>
+    formatSandboxConfiguration(
+      { ...DEFAULT_CONFIG, allowSerialDevices: enabled },
+      { globalPath: "/global", projectPath: "/project" },
+      { domains: [], readPaths: [], writePaths: [] },
+      "linux",
+    );
+  assert.match(display(true), /Serial devices.*enabled/);
+  assert.match(display(false), /Serial devices.*disabled/);
+});
+
+test("unsupported platforms never display serial access as enabled", () => {
+  for (const platform of ["darwin", "win32"] as const) {
+    const config = { ...DEFAULT_CONFIG, allowSerialDevices: true };
+    assert.doesNotMatch(formatSandboxStatus(config, platform), /serial ON/);
+    assert.match(
+      formatSandboxConfiguration(
+        config,
+        { globalPath: "/global", projectPath: "/project" },
+        { domains: [], readPaths: [], writePaths: [] },
+        platform,
+      ),
+      /Serial devices.*unsupported/,
+    );
+  }
+});
 
 test("warnIfLinuxUnenforcedGlobs warns only for user-supplied write globs on Linux", () => {
   const warnings: string[] = [];
@@ -74,7 +110,9 @@ test("permissionPromptRemainingSeconds rounds up and stops at zero", () => {
 test(
   "showPermissionPrompt safely aborts when its timeout expires",
   { timeout: 1_000 },
-  async () => {
+  async (t) => {
+    // Freeze the countdown clock; real timers still exercise auto-abort.
+    t.mock.method(Date, "now", () => 10_000);
     type TestComponent = { render(width: number): string[]; dispose?(): void };
     type PromptFactory<T> = (
       tui: { requestRender(): void },

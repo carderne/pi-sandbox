@@ -3,31 +3,26 @@
   "version": "0.7.1",
   "description": "OS-level sandboxing for pi with interactive permission prompts",
   "keywords": [
-    "pi-package",
-    "pi-extension"
+    "pi-extension",
+    "pi-package"
   ],
-  "type": "module",
-  "packageManager": "pnpm@10.34.3",
-  "pi": {
-    "extensions": [
-      "./index.ts"
-    ]
+  "homepage": "https://github.com/carderne/pi-sandbox",
+  "bugs": {
+    "url": "https://github.com/carderne/pi-sandbox/issues"
   },
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
+  "license": "MIT",
+  "author": "Chris Arderne <chris@rdrn.me>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/carderne/pi-sandbox.git"
   },
-  "author": "Chris Arderne <chris@rdrn.me>",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/carderne/pi-sandbox/issues"
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
-  "homepage": "https://github.com/carderne/pi-sandbox",
   "scripts": {
+    "prepublishOnly": "node scripts/block-publish.mjs",
     "fmt": "oxfmt index.ts src test",
     "lint": "oxlint index.ts src test",
     "check": "tsc --noEmit",
@@ -41,15 +36,6 @@
   "dependencies": {
     "@carderne/sandbox-runtime": "^0.0.76"
   },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.0",
-    "@earendil-works/pi-tui": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.0",
     "@earendil-works/pi-tui": "^0.80.0",
@@ -59,6 +45,16 @@
     "tsx": "^4.23.1",
     "typescript": "^5"
   },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.0",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "packageManager": "pnpm@10.34.3",
   "pnpm": {
     "overrides": {
       "minimatch": ">=10.2.1",
@@ -72,5 +68,10 @@
       "brace-expansion@>=4.0.0 <5.0.11": ">=5.0.11",
       "brace-expansion@>=4.0.0 <5.0.10": ">=5.0.10"
     }
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }
