@@ -30,6 +30,8 @@ import {
   supportsNodeEnvProxy,
 } from "./sandbox-runtime.ts";
 import {
+  cancelPermissionPrompts,
+  resetPermissionPrompts,
   formatSandboxConfiguration,
   formatSandboxStatus,
   type PermissionPromptResult,
@@ -130,6 +132,7 @@ export default function (pi: ExtensionAPI) {
       if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
         process.env.NODE_USE_ENV_PROXY ??= "1";
       }
+      resetPermissionPrompts(pi);
       sandboxEnabled = true;
       sandboxInitialized = true;
       warnIfAllDomainsAllowed(ctx, config);
@@ -154,6 +157,7 @@ export default function (pi: ExtensionAPI) {
       return false;
     }
 
+    cancelPermissionPrompts(pi);
     if (sandboxInitialized) {
       try {
         await sandboxManager.reset();
@@ -337,6 +341,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    cancelPermissionPrompts(pi);
     if (!sandboxInitialized) return;
     try {
       await sandboxManager.reset();
