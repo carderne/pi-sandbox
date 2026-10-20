@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,7 +11,7 @@ import extension from "../src/extension.ts";
 
 type Handler = (event: any, ctx: ExtensionContext) => any;
 
-function session(cwd: string, projectTrusted = true) {
+function session(cwd: string, projectTrusted = true, hasUI = false) {
   const handlers = new Map<string, Handler>();
   let bash: Parameters<ExtensionAPI["registerTool"]>[0] | undefined;
   const errors: string[] = [];
@@ -27,7 +27,7 @@ function session(cwd: string, projectTrusted = true) {
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd,
-    hasUI: false,
+    hasUI,
     isProjectTrusted: () => projectTrusted,
     ui: {
       notify: (message: string, level: string) => {
@@ -165,6 +165,46 @@ test(
     });
     await current.start();
     assert.equal(await current.bash(`printf '%s' "$PI_SANDBOX_PREFIX_TEST"`), "prefix-ran");
+  },
+);
+
+test(
+  "blocked execution does not prompt for write access or retry earlier side effects",
+  {
+    skip: process.platform !== "darwin",
+    timeout: 15_000,
+  },
+  async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-exec-denied-"));
+    const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    const script = join(root, "blocked.sh");
+    const attempts = join(root, "attempts");
+    writeFileSync(script, "#!/bin/bash\nprintf should-not-run\n", { mode: 0o755 });
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "sandbox.json"),
+      JSON.stringify({
+        enabled: true,
+        network: { disabled: true },
+        filesystem: { denyRead: [script], allowRead: [], allowWrite: [root], denyWrite: [] },
+      }),
+    );
+    const current = session(root, true, true);
+    t.after(async () => {
+      await current.shutdown();
+      if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    });
+    await current.start();
+
+    const output = await current.bash(
+      `printf 'attempt\\n' >> ${JSON.stringify(attempts)}; ${JSON.stringify(script)}`,
+    );
+    assert.match(output, /Operation not permitted/);
+    assert.doesNotMatch(output, /should-not-run/);
+    assert.equal(readFileSync(attempts, "utf8"), "attempt\n");
   },
 );
 

@@ -169,13 +169,6 @@ export function supportsNodeEnvProxy(version: string): boolean {
   return (major === 22 && minor >= 21) || major >= 24;
 }
 
-export function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(
-    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
-  );
-  return match ? match[1] : null;
-}
-
 const EXIT_STDIO_GRACE_MS = 100;
 
 /**

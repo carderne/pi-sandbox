@@ -6,8 +6,9 @@ Sandboxes pi like this:
 - read/write/edit: direct control using allow/deny lists
 - bash: uses [`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime) to control network and file system access
 
-When a blocked action is attempted, the user is
-prompted to allow it temporarily or permanently rather than silently failing.
+Blocked read/write/edit tool calls and detected network requests prompt for
+temporary or permanent permission. Bash filesystem failures are returned without
+automatically granting permissions or retrying the command.
 
 ![demo](./demo/demo.gif)
 
@@ -157,9 +158,16 @@ consistently.
 |------|-----------|
 | Domain not in `allowedDomains` | Prompted (bash and `!cmd`, unless `sandboxUserShell` is disabled) |
 | Path not in `allowRead` or `allowWrite` | Prompted (read tool); granting adds to `allowRead` |
-| Path not in `allowWrite` | Prompted (write/edit tools and bash write failures) |
+| Path not in `allowWrite` | Prompted (write/edit tools) |
 | Path in `denyWrite` | Hard-blocked, no prompt |
 | Domain in `deniedDomains` | Hard-blocked at OS level, no prompt |
+
+Bash filesystem errors do not identify whether a read, write, or execution was
+blocked. In particular, `Operation not permitted` does not imply a write failure,
+and `command not found` can mean an executable is unreadable inside the sandbox.
+Use `/sandbox-allow read <path>` or `/sandbox-allow write <path>` after identifying
+the required access, then rerun the command explicitly. Retrying automatically
+could repeat side effects from commands that partially completed.
 
 If a path is added to `allowWrite` via a prompt but is also present in
 `denyWrite`, it remains blocked. A warning is shown explaining which config

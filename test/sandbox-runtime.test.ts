@@ -13,7 +13,6 @@ import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
   createSandboxedBashOps,
-  extractBlockedWritePath,
   resolveAllowances,
   supportsNodeEnvProxy,
 } from "../src/sandbox-runtime.ts";
@@ -307,14 +306,6 @@ test("resolveAllowances makes configured and session write paths readable", () =
 
   assert.deepEqual(effective.readPaths, ["/configured-write", "/session-write"]);
   assert.deepEqual(effective.writePaths, ["/configured-write", "/session-write"]);
-});
-
-test("extractBlockedWritePath recognizes shell sandbox errors", () => {
-  assert.equal(
-    extractBlockedWritePath("bash: line 1: /private/file: Operation not permitted"),
-    "/private/file",
-  );
-  assert.equal(extractBlockedWritePath("permission denied"), null);
 });
 
 test("supportsNodeEnvProxy observes Node release boundaries", () => {
