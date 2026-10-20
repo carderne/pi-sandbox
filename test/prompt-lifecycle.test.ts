@@ -1,62 +1,74 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-
 import test, { type TestContext } from "node:test";
 
+import {
+  CustomEditor,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 
 import * as prompts from "../src/ui.ts";
 
 type Component = {
-  handleInput(data: string): void;
   render(width: number): string[];
   dispose?(): void;
 };
 type Factory = (
-  tui: { requestRender(): void },
+  tui: { requestRender(): void; getFocusedComponent(): unknown },
   theme: { fg(color: string, text: string): string },
-  keys: object,
-  done: (result: prompts.PermissionPromptResult) => void,
 ) => Component;
 
 function fixture(t: TestContext) {
-  const mounts: { component: Component; overlay: boolean; done(): void }[] = [];
+  const mounts: { component: Component; placement?: string }[] = [];
   const active = new Set<Component>();
+  const listeners = new Set<(data: string) => { consume?: boolean } | undefined>();
   const pi = { events: { emit() {} } } as unknown as ExtensionAPI;
+  const editor = Object.create(CustomEditor.prototype) as CustomEditor;
+  editor.focused = true;
+  let focus: unknown = editor;
+  const tui = { requestRender() {}, getFocusedComponent: () => focus };
+  let widget: Component | undefined;
   const ctx = {
     hasUI: true,
     cwd: "/workspace",
     ui: {
-      custom(factory: Factory, options?: { overlay?: boolean }) {
-        return new Promise<prompts.PermissionPromptResult>((resolve) => {
-          let component: Component | undefined;
-          let closed = false;
-          const done = (result: prompts.PermissionPromptResult) => {
-            if (closed) return;
-            closed = true;
-            if (component) active.delete(component);
-            resolve(result);
-            component?.dispose?.();
-          };
-          component = factory({ requestRender() {} }, { fg: (_color, text) => text }, {}, done);
-          mounts.push({
-            component,
-            overlay: options?.overlay === true,
-            done: () => done({ action: "abort", value: "cleanup" }),
-          });
-          if (!closed) active.add(component);
-        });
+      onTerminalInput(handler: (data: string) => { consume?: boolean } | undefined) {
+        listeners.add(handler);
+        return () => {
+          listeners.delete(handler);
+        };
+      },
+      setWidget(_key: string, factory?: Factory, options?: { placement?: string }) {
+        const old = widget;
+        widget = undefined;
+        if (old) {
+          active.delete(old);
+          old.dispose?.();
+        }
+        if (!factory) return;
+        widget = factory(tui, { fg: (_color, text) => text });
+        mounts.push({ component: widget, placement: options?.placement });
+        active.add(widget);
       },
     },
   };
-  t.after(() => {
-    for (const mount of mounts) mount.done();
-  });
+  t.after(() => prompts.cancelPermissionPrompts(pi));
   return {
     pi,
     ctx,
     mounts,
     active,
+    listeners,
+    editor,
+    tui,
+    focus: (target: unknown) => {
+      focus = target;
+    },
+    send: (data: string) => {
+      for (const handler of listeners) if (handler(data)?.consume) return true;
+      return false;
+    },
     ask: (value: string, signal?: AbortSignal, timeout = 0) =>
       prompts.showPermissionPrompt(
         pi,
@@ -80,8 +92,8 @@ test(
     for (let i = 0; i < 3; i++) {
       assert.equal(f.mounts.length, i + 1);
       assert.equal(f.active.size, 1);
-      assert.equal(f.mounts[i]!.overlay, true);
-      f.mounts[i]!.component.handleInput("s");
+      assert.equal(f.mounts[i]!.placement, "aboveEditor");
+      f.send("s");
       await setImmediate();
     }
     assert.deepEqual(
@@ -105,11 +117,11 @@ test(
     controller.abort();
     assert.equal((await b).action, "abort");
     assert.equal(f.mounts.length, 1);
-    f.mounts[0]!.component.handleInput("s");
+    f.send("s");
     await a;
     await setImmediate();
     assert.equal(f.mounts.length, 2);
-    f.mounts[1]!.component.handleInput("s");
+    f.send("s");
     assert.equal((await c).value, "next");
   },
 );
@@ -128,8 +140,8 @@ test(
     await setImmediate();
     assert.equal(f.active.size, 1);
     assert.equal(f.mounts.length, 2);
-    f.mounts[0]!.component.handleInput("s");
-    f.mounts[1]!.component.handleInput("s");
+    f.send("s");
+    f.send("s");
     assert.equal((await b).action, "session");
   },
 );
@@ -170,7 +182,7 @@ test(
     prompts.resetPermissionPrompts(f.pi);
     const next = f.ask("new");
     await setImmediate();
-    f.mounts[1]!.component.handleInput("s");
+    f.send("s");
     assert.equal((await next).action, "session");
   },
 );
@@ -189,7 +201,7 @@ test(
     prompts.cancelPermissionPrompts(child.pi);
     assert.equal((await b).action, "abort");
     assert.equal(parent.active.size, 1);
-    parent.mounts[0]!.component.handleInput("s");
+    parent.send("s");
     assert.equal((await a).action, "session");
   },
 );
@@ -200,25 +212,99 @@ test("timeout aborts one prompt and advances the queue", { timeout: 2000 }, asyn
   const b = f.ask("next");
   assert.equal((await a).action, "abort");
   await setImmediate();
-  f.mounts[1]!.component.handleInput("s");
+  f.send("s");
   assert.equal((await b).action, "session");
+});
+
+test(
+  "other dialogs retain input ownership and permission resumes when the editor returns",
+  { timeout: 2000 },
+  async (t) => {
+    const f = fixture(t);
+    let settled = false;
+    const pending = f.ask("sandbox").then((result) => {
+      settled = true;
+      return result;
+    });
+    await setImmediate();
+    f.focus({ handleInput() {} });
+    assert.equal(f.send("s"), false);
+    await setImmediate();
+    assert.equal(settled, false);
+    assert.equal(f.active.size, 1);
+    f.focus(f.editor);
+    assert.equal(f.send("s"), true);
+    assert.equal((await pending).action, "session");
+    assert.equal(f.editor.focused, true);
+    assert.equal(f.listeners.size, 0);
+  },
+);
+
+test(
+  "cancelling a prompt leaves another dialog focused and removes its listener",
+  { timeout: 2000 },
+  async (t) => {
+    const f = fixture(t);
+    const controller = new AbortController();
+    const pending = f.ask("sandbox", controller.signal);
+    await setImmediate();
+    const other = {};
+    f.focus(other);
+    controller.abort();
+    assert.equal((await pending).action, "abort");
+    assert.equal(f.tui.getFocusedComponent(), other);
+    assert.equal(f.listeners.size, 0);
+    assert.equal(f.active.size, 0);
+  },
+);
+
+test(
+  "disposing a widget rejects its request and removes input interception",
+  { timeout: 2000 },
+  async (t) => {
+    const f = fixture(t);
+    const pending = f.ask("sandbox");
+    await setImmediate();
+    f.ctx.ui.setWidget("sandbox-permission");
+    assert.equal((await pending).action, "abort");
+    assert.equal(f.listeners.size, 0);
+    assert.equal(f.editor.focused, true);
+  },
+);
+
+test("Pi 0.80 focus storage is supported without a getter", { timeout: 2000 }, async (t) => {
+  const f = fixture(t);
+  Reflect.deleteProperty(f.tui, "getFocusedComponent");
+  Reflect.set(f.tui, "focusedComponent", f.editor);
+  const pending = f.ask("legacy");
+  await setImmediate();
+  assert.equal(f.send("s"), true);
+  assert.equal((await pending).action, "session");
+});
+
+test("missing focus inspection fails closed before mounting or listening", async (t) => {
+  const f = fixture(t);
+  Reflect.deleteProperty(f.tui, "getFocusedComponent");
+  await assert.rejects(f.ask("unsupported"), /focus inspection/);
+  assert.equal(f.mounts.length, 0);
+  assert.equal(f.listeners.size, 0);
 });
 
 test("UI failures release the queue without granting permission", { timeout: 2000 }, async (t) => {
   const f = fixture(t);
-  const custom = f.ctx.ui.custom;
+  const setWidget = f.ctx.ui.setWidget;
   let fail = true;
-  f.ctx.ui.custom = (...args) => {
+  f.ctx.ui.setWidget = (...args) => {
     if (fail) {
       fail = false;
-      return Promise.reject(new Error("render failed"));
+      throw new Error("render failed");
     }
-    return custom(...args);
+    return setWidget(...args);
   };
   const a = f.ask("failure");
   const b = f.ask("next");
   await assert.rejects(a, /render failed/);
   await setImmediate();
-  f.mounts[0]!.component.handleInput("s");
+  f.send("s");
   assert.equal((await b).action, "session");
 });

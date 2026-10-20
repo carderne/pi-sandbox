@@ -133,8 +133,20 @@ checked against the same filesystem policy. The OS-level sandbox cannot cover
 these tools because they run directly in the Node.js process rather than in a
 subprocess.
 
-When a block is triggered, a prompt appears with four options. Permission prompts
-automatically select **Abort (keep blocked)** after 10 minutes by default. Set
+When a block is triggered, a permission widget appears above the input editor with
+four options. Concurrent requests are queued per extension instance. The widget
+accepts input while the main Pi editor (including `CustomEditor` subclasses) has
+focus; other dialogs keep their own keyboard input, and permission selection
+resumes when they close. Operation cancellation, sandbox disable, and session
+shutdown abort pending requests without granting access. The input draft is left
+untouched.
+
+Focus inspection uses Pi's `getFocusedComponent()` when available and the
+`focusedComponent` instance field on Pi 0.80. If neither is available, the request
+fails rather than intercepting input without knowing which dialog owns it.
+
+Permission prompts automatically select **Abort (keep blocked)** after 10 minutes
+by default. Set
 `permissionPromptTimeoutSeconds` to a positive number to use a different timeout,
 or set it to `0` to wait indefinitely. A timeout never grants permission.
 
