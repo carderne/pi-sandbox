@@ -7,6 +7,7 @@ import {
 import {
   Input,
   Key,
+  isKeyRelease,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -196,6 +197,7 @@ async function showPermissionWidget(
           };
           unsubscribe = ctx.ui.onTerminalInput((data) => {
             if (!syncFocus()) return;
+            if (isKeyRelease(data)) return { consume: true };
             component.handleInput?.(data);
             return { consume: true };
           });

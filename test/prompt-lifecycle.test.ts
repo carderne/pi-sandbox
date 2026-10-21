@@ -82,6 +82,36 @@ function fixture(t: TestContext) {
 }
 
 test(
+  "arrow key release does not navigate twice and held keys still repeat",
+  { timeout: 2000 },
+  async (t) => {
+    const f = fixture(t);
+    const pending = f.ask("keyboard");
+    await setImmediate();
+    const selected = () =>
+      f.mounts[0]!.component.render(120).find((line) => line.startsWith(" → ["))!;
+    assert.match(selected(), /Allow for this session only/);
+    assert.equal(f.send("\x1b[1;1:1B"), true);
+    assert.match(selected(), /Abort/);
+    assert.equal(f.send("\x1b[1;1:3B"), true);
+    assert.match(selected(), /Abort/);
+    f.send("\x1b[1;1:2B");
+    assert.match(selected(), /Allow for this project/);
+    f.send("\x1b[1;1:1A");
+    assert.match(selected(), /Abort/);
+    f.send("\x1b[1;1:3A");
+    assert.match(selected(), /Abort/);
+    f.send("\x1b[A");
+    assert.match(selected(), /Allow for this session only/);
+    f.send("\x1b[B");
+    assert.match(selected(), /Abort/);
+    f.send("\r");
+    assert.equal((await pending).action, "abort");
+    assert.equal(f.listeners.size, 0);
+  },
+);
+
+test(
   "concurrent prompts mount one at a time and return their own answers",
   { timeout: 2000 },
   async (t) => {
