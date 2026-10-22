@@ -169,6 +169,45 @@ export function supportsNodeEnvProxy(version: string): boolean {
   return (major === 22 && minor >= 21) || major >= 24;
 }
 
+// NODE_USE_ENV_PROXY is process-wide, but sessions (e.g. subagents) each run
+// their own sandbox in the same process. Reference-count the sessions that
+// need it so one session disabling does not remove it from under another.
+let nodeEnvProxyHolders = 0;
+let nodeEnvProxySetHere = false;
+
+/**
+ * Ensure NODE_USE_ENV_PROXY=1 so Node's fetch in this process and its children
+ * honours the sandbox proxy variables. A user-provided value is left alone and
+ * never removed. Returns whether a hold was taken; pair each successful call
+ * with one {@link releaseNodeEnvProxy}.
+ */
+export function acquireNodeEnvProxy(env: NodeJS.ProcessEnv, nodeVersion: string): boolean {
+  if (!supportsNodeEnvProxy(nodeVersion)) return false;
+  if (nodeEnvProxyHolders === 0 && env.NODE_USE_ENV_PROXY === undefined) {
+    env.NODE_USE_ENV_PROXY = "1";
+    nodeEnvProxySetHere = true;
+  }
+  nodeEnvProxyHolders++;
+  return true;
+}
+
+/** Release a hold; the last one removes the variable if it was set here. */
+export function releaseNodeEnvProxy(env: NodeJS.ProcessEnv): void {
+  if (nodeEnvProxyHolders === 0) return;
+  nodeEnvProxyHolders--;
+  if (nodeEnvProxyHolders === 0 && nodeEnvProxySetHere) {
+    delete env.NODE_USE_ENV_PROXY;
+    nodeEnvProxySetHere = false;
+  }
+}
+
+/** Drop session-only grants in place, so a later re-enable starts clean. */
+export function clearSessionAllowances(allowances: SessionAllowances): void {
+  allowances.domains.length = 0;
+  allowances.readPaths.length = 0;
+  allowances.writePaths.length = 0;
+}
+
 const EXIT_STDIO_GRACE_MS = 100;
 
 /**
