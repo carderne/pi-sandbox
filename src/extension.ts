@@ -1,5 +1,5 @@
 import { createSandboxManager } from "@carderne/sandbox-runtime";
-import { type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
   isToolCallEventType,
@@ -24,14 +24,16 @@ import {
 } from "./policy.ts";
 import {
   createSandboxedBashOps,
-  extractBlockedWritePath,
   initializeSandbox,
   updateSandboxConfig,
   resolveAllowances,
   type SessionAllowances,
   supportsNodeEnvProxy,
+  clearSessionAllowances,
 } from "./sandbox-runtime.ts";
 import {
+  cancelPermissionPrompts,
+  resetPermissionPrompts,
   formatSandboxConfiguration,
   formatSandboxStatus,
   type PermissionPromptResult,
@@ -132,6 +134,7 @@ export default function (pi: ExtensionAPI) {
       if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
         process.env.NODE_USE_ENV_PROXY ??= "1";
       }
+      resetPermissionPrompts(pi);
       sandboxEnabled = true;
       sandboxInitialized = true;
       warnIfAllDomainsAllowed(ctx, config);
@@ -156,6 +159,7 @@ export default function (pi: ExtensionAPI) {
       return false;
     }
 
+    cancelPermissionPrompts(pi);
     if (sandboxInitialized) {
       try {
         await sandboxManager.reset();
@@ -165,6 +169,7 @@ export default function (pi: ExtensionAPI) {
     }
     sandboxEnabled = false;
     sandboxInitialized = false;
+    clearSessionAllowances(allowances);
     ctx.ui.setStatus("sandbox", "");
     return true;
   }
@@ -336,14 +341,13 @@ export default function (pi: ExtensionAPI) {
         }).execute(id, params, signal, onUpdate, ctx);
       };
 
-      let result: AgentToolResult<any>;
       try {
-        result = await runBash();
+        return await runBash();
       } catch (error) {
         if (!(error instanceof Error) || !error.message.includes("Operation not permitted")) {
           throw error;
         }
-        result = {
+        return {
           content: [
             {
               type: "text",
@@ -353,48 +357,6 @@ export default function (pi: ExtensionAPI) {
           details: {},
         };
       }
-
-      if (sandboxEnabled && sandboxInitialized && ctx?.hasUI) {
-        const output = result.content
-          .filter((content: any) => content.type === "text")
-          .map((content: any) => content.text)
-          .join("\n");
-        const blockedPath = extractBlockedWritePath(output);
-
-        if (blockedPath) {
-          const path = canonicalizePath(blockedPath, ctx.cwd);
-          const config = loadConfig(ctx.cwd, projectTrusted);
-          const writePermission = await resolveWritePermission({
-            path,
-            allowWrite: effectiveWritePaths(ctx.cwd),
-            denyWrite: config.filesystem?.denyWrite ?? [],
-            baseCwd: ctx.cwd,
-            prompt: (path) =>
-              promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
-            saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
-          });
-          if (writePermission.action === "deny") {
-            return result;
-          }
-          if (writePermission.action === "allow") {
-            await refreshSandbox(ctx.cwd);
-            return runBash();
-          }
-          if (writePermission.action === "granted") {
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `\n--- Write access granted for "${writePermission.value}", retrying ---\n`,
-                },
-              ],
-              details: {},
-            });
-            return runBash();
-          }
-        }
-      }
-      return result;
     },
   });
 
@@ -523,6 +485,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    cancelPermissionPrompts(pi);
     if (!sandboxInitialized) return;
     try {
       await sandboxManager.reset();

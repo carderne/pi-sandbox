@@ -41,11 +41,23 @@ export async function resolveWritePermission({
   return { action: "granted", value: choice.value };
 }
 
+/**
+ * Extract hosts from literal http(s) URLs in a command, skipping userinfo
+ * (`user:pass@`) and lowercasing. Hosts built from shell expansions
+ * (`https://$HOST/`), single-label names (`localhost`) and IPv6 literals are
+ * skipped; the OS sandbox proxy still enforces whatever is connected to.
+ */
 export function extractDomainsFromCommand(command: string): string[] {
-  const urlRegex = /https?:\/\/([a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
+  // The host is the leading run of hostname characters, so trailing shell
+  // punctuation (`,` `;` `&&` `)`) ends it. A host that runs into `$`, `{`, `%`
+  // or `_` is being built by an expansion and its real value is unknown.
+  const urlRegex = /https?:\/\/(?:[^\s/?#@]*@)?([a-z0-9.-]+)(?![\w$%{.-])/gi;
   const domains = new Set<string>();
   let match: RegExpExecArray | null;
-  while ((match = urlRegex.exec(command)) !== null) domains.add(match[1]);
+  while ((match = urlRegex.exec(command)) !== null) {
+    const host = match[1]!.toLowerCase().replace(/\.+$/, "");
+    if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) domains.add(host);
+  }
   return [...domains];
 }
 
