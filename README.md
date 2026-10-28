@@ -6,8 +6,9 @@ Sandboxes pi like this:
 - read/write/edit: direct control using allow/deny lists
 - bash: uses [`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime) to control network and file system access
 
-When a blocked action is attempted, the user is
-prompted to allow it temporarily or permanently rather than silently failing.
+Blocked read/write/edit tool calls and detected network requests prompt for
+temporary or permanent permission. Bash filesystem failures are returned without
+automatically granting permissions or retrying the command.
 
 ![demo](./demo/demo.gif)
 
@@ -82,6 +83,7 @@ Note below that the order of precedence for filesystem read and write are opposi
 ```json
 {
   "enabled": true,
+  "enableAccessRequestTool": false, // Enable sandbox_status and sandbox_request_access
   "sandboxUserShell": false,       // Sandbox commands entered with `!`. Defaults to true
   "permissionPromptTimeoutSeconds": 600, // Defaults to 10 minutes; 0 waits indefinitely
   "allowBrowserProcess": true,     // If you want to use agent-browser or similar Chrome setup
@@ -125,6 +127,12 @@ Alt+S                            toggle sandboxing on/off for the session
 /sandbox-allow write <path>      prompt to add a path to allowWrite
 ```
 
+With `enableAccessRequestTool: true`, the agent can use `sandbox_status` to inspect
+current rules, including session-only grants, and `sandbox_request_access` to ask
+for additional access with a reason. Already-allowed requests do not prompt.
+Approvals return the actual rule and scope to the agent, including any edits you
+make in the permission prompt.
+
 ## What it does
 
 **Bash commands** are wrapped with `sandbox-exec` (macOS) or `bubblewrap`
@@ -137,8 +145,20 @@ checked against the same filesystem policy. The OS-level sandbox cannot cover
 these tools because they run directly in the Node.js process rather than in a
 subprocess.
 
-When a block is triggered, a prompt appears with four options. Permission prompts
-automatically select **Abort (keep blocked)** after 10 minutes by default. Set
+When a block is triggered, a permission widget appears above the input editor with
+four options. Concurrent requests are queued per extension instance. The widget
+accepts input while the main Pi editor (including `CustomEditor` subclasses) has
+focus; other dialogs keep their own keyboard input, and permission selection
+resumes when they close. Operation cancellation, sandbox disable, and session
+shutdown abort pending requests without granting access. The input draft is left
+untouched.
+
+Focus inspection uses Pi's `getFocusedComponent()` when available and the
+`focusedComponent` instance field on Pi 0.80. If neither is available, the request
+fails rather than intercepting input without knowing which dialog owns it.
+
+Permission prompts automatically select **Abort (keep blocked)** after 10 minutes
+by default. Set
 `permissionPromptTimeoutSeconds` to a positive number to use a different timeout,
 or set it to `0` to wait indefinitely. A timeout never grants permission.
 
@@ -162,9 +182,16 @@ consistently.
 |------|-----------|
 | Domain not in `allowedDomains` | Prompted (bash and `!cmd`, unless `sandboxUserShell` is disabled) |
 | Path not in `allowRead` or `allowWrite` | Prompted (read tool); granting adds to `allowRead` |
-| Path not in `allowWrite` | Prompted (write/edit tools and bash write failures) |
+| Path not in `allowWrite` | Prompted (write/edit tools) |
 | Path in `denyWrite` | Hard-blocked, no prompt |
 | Domain in `deniedDomains` | Hard-blocked at OS level, no prompt |
+
+Bash filesystem errors do not identify whether a read, write, or execution was
+blocked. In particular, `Operation not permitted` does not imply a write failure,
+and `command not found` can mean an executable is unreadable inside the sandbox.
+Use `/sandbox-allow read <path>` or `/sandbox-allow write <path>` after identifying
+the required access, then rerun the command explicitly. Retrying automatically
+could repeat side effects from commands that partially completed.
 
 If a path is added to `allowWrite` via a prompt but is also present in
 `denyWrite`, it remains blocked. A warning is shown explaining which config

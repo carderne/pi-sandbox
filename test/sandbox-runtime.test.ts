@@ -12,8 +12,8 @@ import { DEFAULT_CONFIG, mergeConfigLayers } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
+  clearSessionAllowances,
   createSandboxedBashOps,
-  extractBlockedWritePath,
   resolveAllowances,
   supportsNodeEnvProxy,
   supportsSandboxPlatform,
@@ -192,22 +192,67 @@ test("buildRuntimeConfig does not allow a missing SSH_AUTH_SOCK path", () => {
   });
 });
 
-test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
-  const runtime = buildRuntimeConfig({
-    ...DEFAULT_CONFIG,
-    filesystem: {
-      ...DEFAULT_CONFIG.filesystem!,
-      denyRead: ["/tmp"],
-      allowRead: [],
-      allowWrite: ["/tmp"],
-      denyWrite: ["*.key"],
-    },
-  });
+test("buildRuntimeConfig retains literal and canonical allowRead paths", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-allow-read-"));
+  const directory = join(root, "directory");
+  const symlink = join(root, "directory-link");
+  mkdirSync(directory);
+  symlinkSync(directory, symlink);
 
-  assert.deepEqual(runtime.filesystem?.denyRead, [canonicalizePath("/tmp")]);
-  assert.equal(runtime.filesystem?.allowRead?.includes(canonicalizePath("/tmp")), true);
-  assert.deepEqual(runtime.filesystem?.allowWrite, [canonicalizePath("/tmp")]);
-  assert.deepEqual(runtime.filesystem?.denyWrite, ["*.key"]);
+  try {
+    const runtime = buildRuntimeConfig(
+      {
+        ...DEFAULT_CONFIG,
+        filesystem: {
+          ...DEFAULT_CONFIG.filesystem!,
+          allowRead: [directory, symlink],
+          allowWrite: [],
+        },
+      },
+      undefined,
+      "darwin",
+      root,
+    );
+
+    assert.deepEqual(runtime.filesystem?.allowRead, [
+      ...new Set([directory, realpathSync(directory), symlink, realpathSync(symlink)]),
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("buildRuntimeConfig preserves literal and canonical paths in all filesystem lists", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-filesystem-"));
+  const directory = join(root, "directory");
+  const symlink = join(root, "directory-link");
+  mkdirSync(directory);
+  symlinkSync(directory, symlink);
+
+  try {
+    const paths = ["directory-link", directory, "*.key"];
+    const runtime = buildRuntimeConfig(
+      {
+        ...DEFAULT_CONFIG,
+        filesystem: {
+          denyRead: paths,
+          allowRead: paths,
+          allowWrite: paths,
+          denyWrite: paths,
+        },
+      },
+      undefined,
+      "darwin",
+      root,
+    );
+    const expected = [...new Set([symlink, realpathSync(directory), directory, "*.key"])];
+
+    for (const list of ["denyRead", "allowRead", "allowWrite", "denyWrite"] as const) {
+      assert.deepEqual(runtime.filesystem?.[list], expected, list);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("buildRuntimeConfig forwards denyMandatoryCwdFiles to the runtime", () => {
@@ -272,14 +317,6 @@ test("resolveAllowances makes configured and session write paths readable", () =
 
   assert.deepEqual(effective.readPaths, ["/configured-write", "/session-write"]);
   assert.deepEqual(effective.writePaths, ["/configured-write", "/session-write"]);
-});
-
-test("extractBlockedWritePath recognizes shell sandbox errors", () => {
-  assert.equal(
-    extractBlockedWritePath("bash: line 1: /private/file: Operation not permitted"),
-    "/private/file",
-  );
-  assert.equal(extractBlockedWritePath("permission denied"), null);
 });
 
 test("supportsNodeEnvProxy observes Node release boundaries", () => {
@@ -388,4 +425,15 @@ test("network.disabled omits allowedDomains so the runtime skips network isolati
   // Default (not disabled) still emits the allowlist.
   const normal = buildRuntimeConfig(DEFAULT_CONFIG);
   assert.equal(Array.isArray(normal.network?.allowedDomains), true);
+});
+
+test("clearSessionAllowances empties the grant lists in place", () => {
+  const allowances = { domains: ["a.com"], readPaths: ["/r"], writePaths: ["/w"] };
+  const { domains, readPaths, writePaths } = allowances;
+  clearSessionAllowances(allowances);
+  assert.deepEqual(allowances, { domains: [], readPaths: [], writePaths: [] });
+  // Same arrays: closures holding them see the cleared state.
+  assert.equal(allowances.domains, domains);
+  assert.equal(allowances.readPaths, readPaths);
+  assert.equal(allowances.writePaths, writePaths);
 });

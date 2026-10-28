@@ -2,6 +2,8 @@ import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-ru
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -47,11 +49,14 @@ function resolveUnixSockets(config: SandboxConfig): string[] | undefined {
   return unique(sockets);
 }
 
-const canonicalizeFilesystemPattern = (path: string, baseCwd?: string) =>
-  path.includes("*") ? path : canonicalizePath(path, baseCwd);
-
 const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
-  unique(paths.map((path) => canonicalizeFilesystemPattern(path, baseCwd)));
+  unique(
+    paths.flatMap((path) => {
+      if (path.includes("*")) return [path];
+      const absolutePath = resolve(baseCwd ?? process.cwd(), path.replace(/^~(?=$|\/)/, homedir()));
+      return [absolutePath, canonicalizePath(path, baseCwd)];
+    }),
+  );
 
 const isPlatformLinuxOrAndroid = (platform: NodeJS.Platform) =>
   platform === "linux" || platform === "android";
@@ -175,11 +180,11 @@ export function supportsNodeEnvProxy(version: string): boolean {
   return (major === 22 && minor >= 21) || major >= 24;
 }
 
-export function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(
-    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
-  );
-  return match ? match[1] : null;
+/** Drop session-only grants in place, so a later re-enable starts clean. */
+export function clearSessionAllowances(allowances: SessionAllowances): void {
+  allowances.domains.length = 0;
+  allowances.readPaths.length = 0;
+  allowances.writePaths.length = 0;
 }
 
 const EXIT_STDIO_GRACE_MS = 100;
