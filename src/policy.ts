@@ -51,7 +51,7 @@ export function extractDomainsFromCommand(command: string): string[] {
   // The host is the leading run of hostname characters, so trailing shell
   // punctuation (`,` `;` `&&` `)`) ends it. A host that runs into `$`, `{`, `%`
   // or `_` is being built by an expansion and its real value is unknown.
-  const urlRegex = /https?:\/\/(?:[^\s/?#@]*@)?([a-z0-9.-]+)(?![\w$%{])/gi;
+  const urlRegex = /https?:\/\/(?:[^\s/?#@]*@)?([a-z0-9.-]+)(?![\w$%{.-])/gi;
   const domains = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = urlRegex.exec(command)) !== null) {
