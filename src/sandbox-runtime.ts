@@ -27,9 +27,7 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-function resolveSshAgentSocketPath(
-  sshAuthSock: string | undefined,
-): string | undefined {
+function resolveSshAgentSocketPath(sshAuthSock: string | undefined): string | undefined {
   if (!sshAuthSock) return undefined;
   try {
     const resolved = realpathSync(sshAuthSock);
@@ -61,10 +59,8 @@ const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
 const isPlatformLinuxOrAndroid = (platform: NodeJS.Platform) =>
   platform === "linux" || platform === "android";
 
-export function supportsSandboxPlatform(
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return platform === "darwin" || isPlatformLinuxOrAndroid(platform) || false;
+export function supportsSandboxPlatform(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "darwin" || isPlatformLinuxOrAndroid(platform);
 }
 
 function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {

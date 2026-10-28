@@ -73,7 +73,7 @@ function backgroundNodeCommand(cwd: string, source: string): { command: string; 
   return { command, pidPath };
 }
 
-test("Platform sandbox support", (t) => {
+test("Platform sandbox support", () => {
   assert.equal(supportsSandboxPlatform("android"), true);
   assert.equal(supportsSandboxPlatform("win32"), false);
   assert.equal(supportsSandboxPlatform("linux"), true);

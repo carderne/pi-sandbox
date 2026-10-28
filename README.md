@@ -25,15 +25,11 @@ You may need to trial and error to find additional things you need to allow.
 
 `pi-sandbox` delegates the OS-level bash sandbox to
 [`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime),
-published from the fork at <https://github.com/carderne/sandbox-runtime>, which
-is forked from Anthropic's
+published from the fork at <https://github.com/carderne/sandbox-runtime>,
+which is forked from Anthropic's
 [`anthropic-experimental/sandbox-runtime`](https://github.com/anthropic-experimental/sandbox-runtime).
-The sandbox runtime checks for [`ripgrep`](https://github.com/BurntSushi/ripgrep) (the `rg` binary) on **both macOS and Linux** at sandbox-init time.
-Android/Termux uses the Linux backend;
-it also requires `which`, `bwrap` and `socat` on Pi's `PATH`. `socat`
-bridges the network-isolated Bubblewrap sandbox to the host's domain-filtering
-proxy over Unix sockets. It does not guarantee that every Android kernel/device 
-permits all Bubblewrap isolation features. If `rg` 
+The sandbox runtime checks for [`ripgrep`](https://github.com/BurntSushi/ripgrep) (the
+`rg` binary) on **both macOS and Linux** at sandbox-init time. If `rg`
 is not on the `PATH` that pi was launched with, sandbox initialization
 fails with:
 
@@ -50,8 +46,11 @@ Install ripgrep before enabling the extension:
 | Linux (Debian/Ubuntu) | `sudo apt install ripgrep` |
 | Linux (Fedora/RHEL) | `sudo dnf install ripgrep` |
 | Linux (Arch) | `sudo pacman -S ripgrep` |
-| Android (Termux) | `pkg install ripgrep socat which`, install [abwrap-android](https://gist.github.com/spurreiter/caa34d367b7ebbd82806a640bf41157a) as `bwrap` |
 | From source / other | <https://github.com/BurntSushi/ripgrep#installation> |
+
+Experimental Android/Termux support uses the Linux backend and requires `ripgrep`,
+`which`, `socat`, and a [compatible `bwrap`](https://gist.github.com/spurreiter/caa34d367b7ebbd82806a640bf41157a).
+Support depends on the device's kernel and isolation capabilities.
 
 If `which rg` succeeds in your shell but pi still reports `rg not
 found`, pi is being launched from a parent process whose `PATH` does

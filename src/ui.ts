@@ -545,7 +545,7 @@ export function warnIfLinuxUnenforcedGlobs(
   config: SandboxConfig,
   platform: NodeJS.Platform = process.platform,
 ): void {
-  if (platform !== "linux") return;
+  if (platform !== "linux" && platform !== "android") return;
   const userGlobs = (key: "allowWrite" | "denyWrite") => {
     const defaults = new Set(DEFAULT_CONFIG.filesystem?.[key] ?? []);
     return (config.filesystem?.[key] ?? []).filter((p) => hasGlob(p) && !defaults.has(p));
