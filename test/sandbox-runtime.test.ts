@@ -11,11 +11,9 @@ import assert from "node:assert/strict";
 import { DEFAULT_CONFIG, mergeConfigLayers } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
-  acquireNodeEnvProxy,
   buildRuntimeConfig,
   clearSessionAllowances,
   createSandboxedBashOps,
-  releaseNodeEnvProxy,
   resolveAllowances,
   supportsNodeEnvProxy,
 } from "../src/sandbox-runtime.ts";
@@ -417,34 +415,6 @@ test("network.disabled omits allowedDomains so the runtime skips network isolati
   // Default (not disabled) still emits the allowlist.
   const normal = buildRuntimeConfig(DEFAULT_CONFIG);
   assert.equal(Array.isArray(normal.network?.allowedDomains), true);
-});
-
-test("NODE_USE_ENV_PROXY is reference-counted and removed only by the last release", () => {
-  const env: NodeJS.ProcessEnv = {};
-  assert.equal(acquireNodeEnvProxy(env, "24.0.0"), true);
-  assert.equal(acquireNodeEnvProxy(env, "24.0.0"), true);
-  assert.equal(env.NODE_USE_ENV_PROXY, "1");
-  releaseNodeEnvProxy(env);
-  assert.equal(env.NODE_USE_ENV_PROXY, "1");
-  releaseNodeEnvProxy(env);
-  assert.equal(env.NODE_USE_ENV_PROXY, undefined);
-  // An extra release is a no-op rather than going negative.
-  releaseNodeEnvProxy(env);
-  assert.equal(acquireNodeEnvProxy(env, "24.0.0"), true);
-  assert.equal(env.NODE_USE_ENV_PROXY, "1");
-  releaseNodeEnvProxy(env);
-  assert.equal(env.NODE_USE_ENV_PROXY, undefined);
-});
-
-test("NODE_USE_ENV_PROXY leaves a user value alone and is skipped on unsupported Node", () => {
-  const env: NodeJS.ProcessEnv = { NODE_USE_ENV_PROXY: "0" };
-  assert.equal(acquireNodeEnvProxy(env, "24.0.0"), true);
-  releaseNodeEnvProxy(env);
-  assert.equal(env.NODE_USE_ENV_PROXY, "0");
-
-  const old: NodeJS.ProcessEnv = {};
-  assert.equal(acquireNodeEnvProxy(old, "20.0.0"), false);
-  assert.equal(old.NODE_USE_ENV_PROXY, undefined);
 });
 
 test("clearSessionAllowances empties the grant lists in place", () => {

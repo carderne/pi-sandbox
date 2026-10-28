@@ -27,9 +27,8 @@ import {
   updateSandboxConfig,
   resolveAllowances,
   type SessionAllowances,
-  acquireNodeEnvProxy,
+  supportsNodeEnvProxy,
   clearSessionAllowances,
-  releaseNodeEnvProxy,
 } from "./sandbox-runtime.ts";
 import {
   formatSandboxConfiguration,
@@ -59,16 +58,6 @@ export default function (pi: ExtensionAPI) {
   let sandboxEnabled = false;
   let sandboxInitialized = false;
   let projectTrusted = false;
-  // Whether the session asked for NODE_USE_ENV_PROXY, and whether it currently
-  // holds it (released on disable and shutdown).
-  let nodeEnvProxyRequested = false;
-  let holdsNodeEnvProxy = false;
-
-  function releaseProxyEnvironment(): void {
-    if (!holdsNodeEnvProxy) return;
-    releaseNodeEnvProxy(process.env);
-    holdsNodeEnvProxy = false;
-  }
   const allowances: SessionAllowances = { domains: [], readPaths: [], writePaths: [] };
 
   const effectiveAllowances = (cwd: string) =>
@@ -139,9 +128,8 @@ export default function (pi: ExtensionAPI) {
 
     try {
       await initializeSandbox(sandboxManager, config, allowances, ctx.cwd);
-      if (setProxyEnvironment) nodeEnvProxyRequested = true;
-      if (nodeEnvProxyRequested && !holdsNodeEnvProxy) {
-        holdsNodeEnvProxy = acquireNodeEnvProxy(process.env, process.versions.node);
+      if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
+        process.env.NODE_USE_ENV_PROXY ??= "1";
       }
       sandboxEnabled = true;
       sandboxInitialized = true;
@@ -176,10 +164,7 @@ export default function (pi: ExtensionAPI) {
     }
     sandboxEnabled = false;
     sandboxInitialized = false;
-    // Session grants and the proxy env var belong to this enabled period; a
-    // later re-enable must not inherit them.
     clearSessionAllowances(allowances);
-    releaseProxyEnvironment();
     ctx.ui.setStatus("sandbox", "");
     return true;
   }
@@ -354,7 +339,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
-    releaseProxyEnvironment();
     if (!sandboxInitialized) return;
     try {
       await sandboxManager.reset();
