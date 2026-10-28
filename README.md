@@ -77,7 +77,7 @@ Note below that the order of precedence for filesystem read and write are opposi
 ```json
 {
   "enabled": true,
-  "enableAccessRequestTool": false, // Let the agent ask you for path or domain access
+  "enableAccessRequestTool": false, // Enable sandbox_status and sandbox_request_access
   "sandboxUserShell": false,       // Sandbox commands entered with `!`. Defaults to true
   "permissionPromptTimeoutSeconds": 600, // Defaults to 10 minutes; 0 waits indefinitely
   "allowBrowserProcess": true,     // If you want to use agent-browser or similar Chrome setup
@@ -120,6 +120,12 @@ Alt+S                            toggle sandboxing on/off for the session
 /sandbox-allow read <path>       prompt to add a path to allowRead
 /sandbox-allow write <path>      prompt to add a path to allowWrite
 ```
+
+With `enableAccessRequestTool: true`, the agent can use `sandbox_status` to inspect
+current rules, including session-only grants, and `sandbox_request_access` to ask
+for additional access with a reason. Already-allowed requests do not prompt.
+Approvals return the actual rule and scope to the agent, including any edits you
+make in the permission prompt.
 
 ## What it does
 

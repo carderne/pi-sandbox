@@ -216,12 +216,51 @@ export default function (pi: ExtensionAPI) {
     return choice;
   }
 
-  function registerAccessRequestTool() {
+  function registerAccessTools() {
+    pi.registerTool({
+      name: "sandbox_status",
+      label: "Sandbox status",
+      description:
+        "Inspect sandbox enabled state, effective allow and deny rules, and session-only grants. " +
+        "Relative filesystem rules are resolved against cwd. Write access also grants read access; " +
+        "denyWrite and deniedDomains override allows, while allowRead overrides denyRead.",
+      parameters: Type.Object({}),
+      async execute(_id, _params, _signal, _onUpdate, ctx) {
+        const config = loadConfig(ctx.cwd, projectTrusted);
+        const effective = resolveAllowances(config, allowances);
+        const status = {
+          enabled: sandboxEnabled,
+          cwd: ctx.cwd,
+          network: {
+            disabled: config.network?.disabled ?? false,
+            allowedDomains: effective.domains,
+            deniedDomains: config.network?.deniedDomains ?? [],
+          },
+          filesystem: {
+            disabled: config.filesystem?.disabled ?? false,
+            allowRead: effective.readPaths,
+            allowWrite: effective.writePaths,
+            denyRead: config.filesystem?.denyRead ?? [],
+            denyWrite: config.filesystem?.denyWrite ?? [],
+          },
+          sessionGrants: {
+            domains: [...allowances.domains],
+            readPaths: [...allowances.readPaths],
+            writePaths: [...allowances.writePaths],
+          },
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
+          details: status,
+        };
+      },
+    });
     pi.registerTool({
       name: "sandbox_request_access",
       label: "Request sandbox access",
       description:
-        "Request user approval for read or write access to a path, or network access to a domain.",
+        "Request user approval for read or write access to a path, or network access to a domain. " +
+        "Use sandbox_status to inspect current permissions. Already-allowed access does not prompt.",
       parameters: Type.Object({
         kind: Type.Union([Type.Literal("read"), Type.Literal("write"), Type.Literal("domain")]),
         target: Type.String({ minLength: 1, description: "Filesystem path or domain hostname" }),
@@ -240,6 +279,23 @@ export default function (pi: ExtensionAPI) {
         ) {
           throw new Error(`Sandbox: ${kind} access to "${target}" is explicitly denied.`);
         }
+        const effective = resolveAllowances(config, allowances);
+        const alreadyAllowed =
+          kind === "domain"
+            ? domainIsAllowed(target, effective.domains)
+            : matchesPattern(
+                target,
+                kind === "read" ? effective.readPaths : effective.writePaths,
+                ctx.cwd,
+              );
+        if (alreadyAllowed) {
+          return {
+            content: [
+              { type: "text", text: `Access already allowed: ${kind} ${JSON.stringify(target)}.` },
+            ],
+            details: { kind, target, alreadyAllowed: true },
+          };
+        }
         if (!ctx.hasUI) throw new Error("Sandbox access requests require an approval UI.");
         const choice = await requestAccess({ kind, target, ctx, reason, signal });
         if (choice.action === "abort")
@@ -248,7 +304,9 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: "Access approved.",
+              text:
+                `Access approved: ${kind} ${JSON.stringify(target)}.\n` +
+                `Rule: ${JSON.stringify(choice.value)}\nScope: ${choice.action}`,
             },
           ],
           details: { kind, target, rule: choice.value, scope: choice.action },
@@ -449,7 +507,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     projectTrusted = ctx.isProjectTrusted();
     if (loadConfig(ctx.cwd, projectTrusted).enableAccessRequestTool === true) {
-      registerAccessRequestTool();
+      registerAccessTools();
     }
     if (pi.getFlag("no-sandbox") as boolean) {
       sandboxEnabled = false;
