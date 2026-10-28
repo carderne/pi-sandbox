@@ -1,11 +1,18 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
+import {
+  CustomEditor,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
 
 import extension from "../src/extension.ts";
 
@@ -36,6 +43,11 @@ async function fixture(t: TestContext, enableAccessRequestTool: boolean) {
   const tools = new Map<string, Parameters<ExtensionAPI["registerTool"]>[0]>();
   const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
   let prompts = 0;
+  let input: ((data: string) => { consume?: boolean } | undefined) | undefined;
+  let widget: (Component & { dispose?(): void }) | undefined;
+  const editor = Object.create(CustomEditor.prototype) as CustomEditor;
+  const tui = { requestRender() {}, getFocusedComponent: () => editor } as unknown as TUI;
+  const theme = { fg: (_color: string, text: string) => text } as unknown as Theme;
   const api = {
     registerTool: (tool: Parameters<ExtensionAPI["registerTool"]>[0]) => tools.set(tool.name, tool),
     on: (event: string, handler: (event: any, ctx: ExtensionContext) => any) =>
@@ -52,18 +64,32 @@ async function fixture(t: TestContext, enableAccessRequestTool: boolean) {
     isProjectTrusted: () => true,
     ui: {
       notify() {},
-      custom: async () => {
+      onTerminalInput(handler: typeof input) {
+        input = handler;
+        return () => {
+          input = undefined;
+        };
+      },
+      setWidget(_key: string, factory?: (tui: TUI, theme: Theme) => typeof widget) {
+        widget?.dispose?.();
+        widget = undefined;
+        if (!factory) return;
         prompts++;
-        return { action: "session", value: join(root, "new") };
+        widget = factory(tui, theme);
       },
     },
   } as unknown as ExtensionContext;
   extension(api);
+  t.after(() => handlers.get("session_shutdown")!({}, ctx));
   await handlers.get("session_start")!({}, ctx);
   return {
     root,
     tools,
     prompts: () => prompts,
+    send: (data: string) => {
+      assert.ok(input, "Permission widget must be listening for input");
+      input(data);
+    },
     execute: (name: string, params: Record<string, unknown> = {}) =>
       tools.get(name)!.execute("test", params, undefined, undefined, ctx),
   };
@@ -98,7 +124,13 @@ test("access tools report effective grants and avoid redundant or forbidden prom
   await assert.rejects(request("domain", "blocked.example"), /explicitly denied/);
   assert.equal(f.prompts(), 0);
 
-  const granted = await request("read", join(f.root, "new", "file"));
+  const pending = request("read", join(f.root, "new", "file"));
+  await setImmediate();
+  f.send("\t");
+  f.send("\x15");
+  f.send(join(f.root, "new"));
+  f.send("\r");
+  const granted = await pending;
   const message = granted.content.find((part) => part.type === "text");
   assert.ok(message && message.type === "text");
   assert.ok(message.text.includes(`Rule: ${JSON.stringify(join(f.root, "new"))}`));
