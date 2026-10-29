@@ -175,6 +175,19 @@ Saved project or global permission changes are not broadcast to other running
 sessions' sandbox managers. Restart affected sessions to apply grants or revocations
 consistently.
 
+### Herdr approval status
+
+With [Herdr](https://herdr.dev/)'s Pi integration installed, an active sandbox
+permission prompt reports `blocked` until the prompt closes. Approval, rejection,
+timeout, cancellation, and UI errors clear the state so Herdr can resume showing
+`working` or `idle`.
+
+The extension emits paired `herdr:blocked` events (`active: true` with the label
+`Sandbox permission required`, then `active: false`) for each interactive prompt.
+Queued requests that never open and headless requests do not emit these events.
+The existing `request-attention` notification is preserved. No Herdr installation
+is required to use pi-sandbox, and these events never grant access themselves.
+
 ### What is prompted vs. hard-blocked
 
 | Rule | Behaviour |

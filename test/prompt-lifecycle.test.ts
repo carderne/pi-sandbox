@@ -23,7 +23,16 @@ function fixture(t: TestContext) {
   const mounts: { component: Component; placement?: string }[] = [];
   const active = new Set<Component>();
   const listeners = new Set<(data: string) => { consume?: boolean } | undefined>();
-  const pi = { events: { emit() {} } } as unknown as ExtensionAPI;
+  const events: { name: string; data: unknown }[] = [];
+  const blocked: { active: boolean; label?: string }[] = [];
+  const pi = {
+    events: {
+      emit(name: string, data: unknown) {
+        events.push({ name, data });
+        if (name === "herdr:blocked") blocked.push(data as (typeof blocked)[number]);
+      },
+    },
+  } as unknown as ExtensionAPI;
   const editor = Object.create(CustomEditor.prototype) as CustomEditor;
   editor.focused = true;
   let focus: unknown = editor;
@@ -57,6 +66,8 @@ function fixture(t: TestContext) {
   return {
     pi,
     ctx,
+    events,
+    blocked,
     mounts,
     active,
     listeners,
@@ -119,6 +130,7 @@ test(
     const requests = [f.ask("one"), f.ask("two"), f.ask("three")];
     await setImmediate();
     assert.equal(f.mounts.length, 1);
+    assert.deepEqual(f.blocked, [{ active: true, label: "Sandbox permission required" }]);
     for (let i = 0; i < 3; i++) {
       assert.equal(f.mounts.length, i + 1);
       assert.equal(f.active.size, 1);
@@ -131,6 +143,10 @@ test(
       ["one", "two", "three"].map((value) => ({ action: "session", value })),
     );
     assert.equal(f.active.size, 0);
+    assert.deepEqual(
+      f.blocked.map((event) => event.active),
+      [true, false, true, false, true, false],
+    );
   },
 );
 
@@ -147,12 +163,20 @@ test(
     controller.abort();
     assert.equal((await b).action, "abort");
     assert.equal(f.mounts.length, 1);
+    assert.deepEqual(
+      f.blocked.map((event) => event.active),
+      [true],
+    );
     f.send("s");
     await a;
     await setImmediate();
     assert.equal(f.mounts.length, 2);
     f.send("s");
     assert.equal((await c).value, "next");
+    assert.deepEqual(
+      f.blocked.map((event) => event.active),
+      [true, false, true, false],
+    );
   },
 );
 
@@ -173,6 +197,10 @@ test(
     f.send("s");
     f.send("s");
     assert.equal((await b).action, "session");
+    assert.deepEqual(
+      f.blocked.map((event) => event.active),
+      [true, false, true, false],
+    );
   },
 );
 
@@ -194,7 +222,23 @@ test("already aborted and headless requests never mount", async (t) => {
     ).action,
     "abort",
   );
+  for (const mode of ["rpc", "json", "print"] as const) {
+    assert.equal(
+      (
+        await prompts.showPermissionPrompt(
+          f.pi,
+          { ...f.ctx, mode } as unknown as ExtensionContext,
+          "Blocked",
+          mode,
+          () => null,
+          0,
+        )
+      ).action,
+      "abort",
+    );
+  }
   assert.equal(f.mounts.length, 0);
+  assert.deepEqual(f.events, []);
 });
 
 test(
@@ -209,11 +253,19 @@ test(
     assert.equal(f.mounts.length, 1);
     assert.equal(f.active.size, 0);
     assert.equal((await f.ask("closed")).action, "abort");
+    assert.deepEqual(
+      f.blocked.map((event) => event.active),
+      [true, false],
+    );
     prompts.resetPermissionPrompts(f.pi);
     const next = f.ask("new");
     await setImmediate();
     f.send("s");
     assert.equal((await next).action, "session");
+    assert.deepEqual(
+      f.blocked.map((event) => event.active),
+      [true, false, true, false],
+    );
   },
 );
 
@@ -242,8 +294,16 @@ test("timeout aborts one prompt and advances the queue", { timeout: 2000 }, asyn
   const b = f.ask("next");
   assert.equal((await a).action, "abort");
   await setImmediate();
+  assert.deepEqual(
+    f.blocked.map((event) => event.active),
+    [true, false, true],
+  );
   f.send("s");
   assert.equal((await b).action, "session");
+  assert.deepEqual(
+    f.blocked.map((event) => event.active),
+    [true, false, true, false],
+  );
 });
 
 test(
@@ -299,6 +359,10 @@ test(
     assert.equal((await pending).action, "abort");
     assert.equal(f.listeners.size, 0);
     assert.equal(f.editor.focused, true);
+    assert.deepEqual(
+      f.blocked.map((event) => event.active),
+      [true, false],
+    );
   },
 );
 
@@ -318,6 +382,10 @@ test("missing focus inspection fails closed before mounting or listening", async
   await assert.rejects(f.ask("unsupported"), /focus inspection/);
   assert.equal(f.mounts.length, 0);
   assert.equal(f.listeners.size, 0);
+  assert.deepEqual(
+    f.blocked.map((event) => event.active),
+    [true, false],
+  );
 });
 
 test("UI failures release the queue without granting permission", { timeout: 2000 }, async (t) => {
@@ -335,6 +403,82 @@ test("UI failures release the queue without granting permission", { timeout: 200
   const b = f.ask("next");
   await assert.rejects(a, /render failed/);
   await setImmediate();
+  assert.deepEqual(
+    f.blocked.map((event) => event.active),
+    [true, false, true],
+  );
   f.send("s");
   assert.equal((await b).action, "session");
+  assert.deepEqual(
+    f.blocked.map((event) => event.active),
+    [true, false, true, false],
+  );
+});
+
+for (const [label, key, action] of [
+  ["session approval", "s", "session"],
+  ["project approval", "P", "project"],
+  ["global approval", "A", "global"],
+  ["rejection", "\x1b", "abort"],
+  ["Ctrl+C cancellation", "\x03", "abort"],
+] as const) {
+  test(`Herdr blocked state brackets ${label}`, { timeout: 2000 }, async (t) => {
+    const f = fixture(t);
+    const pending = f.ask("private-path-not-in-events");
+    await setImmediate();
+    assert.deepEqual(f.events, [
+      { name: "request-attention", data: { message: "Sandbox permission required" } },
+      { name: "herdr:blocked", data: { active: true, label: "Sandbox permission required" } },
+    ]);
+    assert.equal(f.send(key), true);
+    assert.equal((await pending).action, action);
+    assert.deepEqual(f.blocked, [
+      { active: true, label: "Sandbox permission required" },
+      { active: false },
+    ]);
+    assert.equal(f.active.size, 0);
+    assert.equal(f.listeners.size, 0);
+  });
+}
+
+test("Herdr state clears when widget teardown fails", { timeout: 2000 }, async (t) => {
+  const f = fixture(t);
+  const setWidget = f.ctx.ui.setWidget;
+  let failRemoval = true;
+  f.ctx.ui.setWidget = (...args) => {
+    setWidget(...args);
+    if (!args[1] && failRemoval) {
+      failRemoval = false;
+      throw new Error("teardown failed");
+    }
+  };
+  const a = f.ask("failure");
+  const b = f.ask("next");
+  const rejected = assert.rejects(a, /teardown failed/);
+  await setImmediate();
+  f.send("s");
+  await rejected;
+  await setImmediate();
+  assert.deepEqual(
+    f.blocked.map((event) => event.active),
+    [true, false, true],
+  );
+  f.send("s");
+  assert.equal((await b).action, "session");
+  assert.deepEqual(
+    f.blocked.map((event) => event.active),
+    [true, false, true, false],
+  );
+  assert.equal(f.listeners.size, 0);
+  assert.equal(f.active.size, 0);
+});
+
+test("permission prompts still work without a Herdr listener", { timeout: 2000 }, async (t) => {
+  const f = fixture(t);
+  f.pi.events.emit = () => {};
+  const pending = f.ask("standalone");
+  await setImmediate();
+  f.send("s");
+  assert.equal((await pending).action, "session");
+  assert.equal(f.active.size, 0);
 });
