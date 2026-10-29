@@ -175,6 +175,55 @@ Saved project or global permission changes are not broadcast to other running
 sessions' sandbox managers. Restart affected sessions to apply grants or revocations
 consistently.
 
+### Permission prompt events
+
+Inline permission widgets do not trigger Pi's `ui_prompt_start` and
+`ui_prompt_end` events. Extensions that report whether an agent is working or
+waiting for user input can listen on `pi.events` instead:
+
+| Event | When it is emitted |
+|-------|--------------------|
+| `pi-sandbox:permission-prompt-start` | A request reaches the front of the queue, before its widget is created. |
+| `pi-sandbox:permission-prompt-end` | The request finishes, after widget cleanup. |
+
+Both events carry `{ id: string, title: string }`. The `id` is unique to the
+prompt, including across extension instances, and matches its start and end.
+The `title` is the displayed prompt heading and may contain a path or domain.
+An end event is emitted for every start, including on approval, rejection,
+timeout, operation cancellation, sandbox disable, session shutdown, external
+widget disposal, or UI failure. Requests cancelled before reaching the front of
+the queue, and headless or non-TUI requests, emit neither event.
+
+For example, a status extension can track outstanding sandbox prompts:
+
+```typescript
+const sandboxPrompts = new Set<string>();
+const unsubscribe = [
+  pi.events.on("pi-sandbox:permission-prompt-start", (data) => {
+    const { id } = data as { id: string };
+    sandboxPrompts.add(id);
+    updateState();
+  }),
+  pi.events.on("pi-sandbox:permission-prompt-end", (data) => {
+    const { id } = data as { id: string };
+    sandboxPrompts.delete(id);
+    updateState();
+  }),
+];
+pi.on("session_shutdown", () => {
+  for (const off of unsubscribe) off();
+  sandboxPrompts.clear();
+});
+```
+
+Here `updateState()` is the status extension's publisher. It should report
+waiting while `sandboxPrompts.size > 0` or a standard Pi UI prompt is open.
+Closing the last prompt only means active work resumes if an agent run is still
+in progress. Keep tracking `agent_start` and `agent_settled` separately.
+
+The existing `request-attention` event is unchanged. It is a notification, not a
+paired lifecycle event, so it cannot tell an observer when waiting has ended.
+
 ### What is prompted vs. hard-blocked
 
 | Rule | Behaviour |
