@@ -279,31 +279,34 @@ export default function (pi: ExtensionAPI) {
           throw new Error("Target and reason must not be empty.");
         if (signal?.aborted) throw new Error("Access request cancelled.");
         const target = kind === "domain" ? input.trim() : canonicalizePath(input, ctx.cwd);
-        const config = loadConfig(ctx.cwd, projectTrusted);
-        if (
-          (kind === "write" &&
-            matchesPattern(target, config.filesystem?.denyWrite ?? [], ctx.cwd)) ||
-          (kind === "domain" && domainIsAllowed(target, config.network?.deniedDomains ?? []))
-        ) {
-          throw new Error(`Sandbox: ${kind} access to "${target}" is explicitly denied.`);
-        }
-        const effective = resolveAllowances(config, allowances);
-        const alreadyAllowed =
-          kind === "domain"
+        function isAllowed() {
+          const config = loadConfig(ctx.cwd, projectTrusted);
+          if (
+            (kind === "write" &&
+              matchesPattern(target, config.filesystem?.denyWrite ?? [], ctx.cwd)) ||
+            (kind === "domain" && domainIsAllowed(target, config.network?.deniedDomains ?? []))
+          ) {
+            throw new Error(`Sandbox: ${kind} access to "${target}" is explicitly denied.`);
+          }
+          const effective = resolveAllowances(config, allowances);
+          return kind === "domain"
             ? domainIsAllowed(target, effective.domains)
             : matchesPattern(
                 target,
                 kind === "read" ? effective.readPaths : effective.writePaths,
                 ctx.cwd,
               );
-        if (alreadyAllowed) {
-          return {
-            content: [
-              { type: "text", text: `Access already allowed: ${kind} ${JSON.stringify(target)}.` },
-            ],
-            details: { kind, target, alreadyAllowed: true },
-          };
         }
+        const alreadyAllowedResult = () => ({
+          content: [
+            {
+              type: "text" as const,
+              text: `Access already allowed: ${kind} ${JSON.stringify(target)}.`,
+            },
+          ],
+          details: { kind, target, alreadyAllowed: true },
+        });
+        if (isAllowed()) return alreadyAllowedResult();
         if (!ctx.hasUI) throw new Error("Sandbox access requests require an approval UI.");
         const choice = await requestAccess({ kind, target, ctx, reason, signal });
         if (choice.action === "abort")
