@@ -16,6 +16,15 @@ import {
   loadConfig,
 } from "./config.ts";
 import {
+  cancelPermissionPrompts,
+  resetPermissionPrompts,
+  type PermissionPromptResult,
+  promptDomainBlock,
+  promptReadBlock,
+  showPermissionPrompt,
+  promptWriteBlock,
+} from "./permissions.ts";
+import {
   canonicalizePath,
   domainIsAllowed,
   extractDomainsFromCommand,
@@ -33,15 +42,8 @@ import {
   clearSessionAllowances,
 } from "./sandbox-runtime.ts";
 import {
-  cancelPermissionPrompts,
-  resetPermissionPrompts,
   formatSandboxConfiguration,
   formatSandboxStatus,
-  type PermissionPromptResult,
-  promptDomainBlock,
-  promptReadBlock,
-  showPermissionPrompt,
-  promptWriteBlock,
   warnIfAllDomainsAllowed,
   warnIfLinuxUnenforcedGlobs,
 } from "./ui.ts";
