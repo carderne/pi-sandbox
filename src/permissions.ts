@@ -1,6 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { domainIsAllowed, matchesPattern } from "./policy.ts";
+import {
+  domainIsAllowed,
+  matchesPattern,
+  resolveWritePermission as resolveWritePolicy,
+} from "./policy.ts";
 import { renderPermissionPrompt } from "./ui.ts";
 
 export type PermissionChoice = "abort" | "session" | "project" | "global";
@@ -127,18 +131,25 @@ export function promptReadBlock(
   );
 }
 
-export function promptWriteBlock(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  path: string,
-  timeoutSeconds?: number,
-): Promise<PermissionPromptResult> {
-  return showPermissionPrompt(
-    pi,
-    ctx,
-    `📝 Write blocked: "${path}" is not in allowWrite`,
-    path,
-    (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
-    timeoutSeconds,
-  );
-}
+export const resolveWritePermission = ({
+  pi,
+  ctx,
+  timeoutSeconds,
+  ...policy
+}: Omit<Parameters<typeof resolveWritePolicy>[0], "prompt"> & {
+  pi: ExtensionAPI;
+  ctx: ExtensionContext;
+  timeoutSeconds?: number;
+}) =>
+  resolveWritePolicy({
+    ...policy,
+    prompt: (path) =>
+      showPermissionPrompt(
+        pi,
+        ctx,
+        `📝 Write blocked: "${path}" is not in allowWrite`,
+        path,
+        (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
+        timeoutSeconds,
+      ),
+  });

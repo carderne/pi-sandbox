@@ -22,14 +22,13 @@ import {
   promptDomainBlock,
   promptReadBlock,
   showPermissionPrompt,
-  promptWriteBlock,
+  resolveWritePermission,
 } from "./permissions.ts";
 import {
   canonicalizePath,
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
-  resolveWritePermission,
 } from "./policy.ts";
 import {
   createSandboxedBashOps,
@@ -449,7 +448,9 @@ export default function (pi: ExtensionAPI) {
         allowWrite: effectiveWritePaths(ctx.cwd),
         denyWrite: config.filesystem?.denyWrite ?? [],
         baseCwd: ctx.cwd,
-        prompt: (path) => promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
+        pi,
+        ctx,
+        timeoutSeconds: config.permissionPromptTimeoutSeconds,
         saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
       });
       if (writePermission.action === "deny") {
