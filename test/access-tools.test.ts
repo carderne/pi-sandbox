@@ -101,6 +101,44 @@ test("access tools remain opt-in", async (t) => {
   assert.equal(f.tools.has("sandbox_request_access"), false);
 });
 
+test("queued access requests skip prompts covered by a broader grant", async (t) => {
+  const f = await fixture(t, true);
+  const parent = join(f.root, "A");
+  const request = (target: string) =>
+    f.execute("sandbox_request_access", {
+      kind: "read",
+      target,
+      reason: "Inspect project",
+    });
+  const first = request(join(parent, "B"));
+  const second = request(join(parent, "C"));
+  const results = Promise.allSettled([first, second]);
+  await setImmediate();
+  assert.equal(f.prompts(), 1);
+
+  f.send("\t");
+  f.send("\x15");
+  f.send(parent);
+  f.send("\r");
+  await first;
+  await setImmediate();
+
+  assert.equal(f.prompts(), 1, "Must not show a second prompt after the user grants access to A");
+  assert.deepEqual(
+    (await results).map((result) => result.status),
+    ["fulfilled", "fulfilled"],
+  );
+  const covered = await second;
+  assert.deepEqual(covered.content, [
+    { type: "text", text: `Access already allowed: read ${JSON.stringify(join(parent, "C"))}.` },
+  ]);
+  assert.deepEqual(covered.details, {
+    kind: "read",
+    target: join(parent, "C"),
+    alreadyAllowed: true,
+  });
+});
+
 test("access tools report effective grants and avoid redundant or forbidden prompts", async (t) => {
   const f = await fixture(t, true);
   const request = (kind: string, target: string) =>

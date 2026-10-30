@@ -46,13 +46,8 @@ export async function runPermissionRequest<T>(
   aborted: T,
 ): Promise<T> {
   const queue = getRequestQueue(pi);
-  const operationSignal = ctx.signal;
-  const signal = AbortSignal.any([
-    queue.controller.signal,
-    ...(operationSignal ? [operationSignal] : []),
-  ]);
+  const signal = AbortSignal.any([queue.controller.signal, ...(ctx.signal ? [ctx.signal] : [])]);
   if (signal.aborted) return aborted;
-
   const previous = queue.tail;
   let release!: () => void;
   const finished = new Promise<void>((resolve) => {
@@ -82,14 +77,26 @@ export async function showPermissionPrompt(
   originalValue: string,
   validateValue: (value: string) => string | null,
   timeoutSeconds?: number,
+  onChoice?: (choice: PermissionPromptResult) => Promise<void>,
 ): Promise<PermissionPromptResult> {
   const aborted: PermissionPromptResult = { action: "abort", value: originalValue };
   if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) return aborted;
   return runPermissionRequest(
     pi,
     ctx,
-    (signal) =>
-      renderPermissionPrompt(pi, ctx, title, originalValue, validateValue, signal, timeoutSeconds),
+    async (signal) => {
+      const choice = await renderPermissionPrompt(
+        pi,
+        ctx,
+        title,
+        originalValue,
+        validateValue,
+        signal,
+        timeoutSeconds,
+      );
+      await onChoice?.(choice);
+      return choice;
+    },
     aborted,
   );
 }
@@ -99,37 +106,39 @@ const validRule = (value: string, matches: boolean, target: string): string | nu
   return matches ? null : `Rule must match the blocked ${target}.`;
 };
 
-export function promptDomainBlock(
+export const promptDomainBlock = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   domain: string,
   timeoutSeconds?: number,
-): Promise<PermissionPromptResult> {
-  return showPermissionPrompt(
+  onChoice?: (choice: PermissionPromptResult) => Promise<void>,
+): Promise<PermissionPromptResult> =>
+  showPermissionPrompt(
     pi,
     ctx,
     `🌐 Network blocked: "${domain}" is not in allowedDomains`,
     domain,
     (value) => validRule(value, domainIsAllowed(domain, [value]), `domain "${domain}"`),
     timeoutSeconds,
+    onChoice,
   );
-}
 
-export function promptReadBlock(
+export const promptReadBlock = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   path: string,
   timeoutSeconds?: number,
-): Promise<PermissionPromptResult> {
-  return showPermissionPrompt(
+  onChoice?: (choice: PermissionPromptResult) => Promise<void>,
+): Promise<PermissionPromptResult> =>
+  showPermissionPrompt(
     pi,
     ctx,
     `📖 Read blocked: "${path}" is not in allowRead`,
     path,
     (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
     timeoutSeconds,
+    onChoice,
   );
-}
 
 export const resolveWritePermission = ({
   pi,
@@ -141,15 +150,26 @@ export const resolveWritePermission = ({
   ctx: ExtensionContext;
   timeoutSeconds?: number;
 }) =>
-  resolveWritePolicy({
-    ...policy,
-    prompt: (path) =>
-      showPermissionPrompt(
-        pi,
-        ctx,
-        `📝 Write blocked: "${path}" is not in allowWrite`,
-        path,
-        (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
-        timeoutSeconds,
-      ),
-  });
+  runPermissionRequest(
+    pi,
+    ctx,
+    async (signal) =>
+      resolveWritePolicy({
+        ...policy,
+        prompt: async (path) => {
+          if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) {
+            return { action: "abort", value: path };
+          }
+          return renderPermissionPrompt(
+            pi,
+            ctx,
+            `📝 Write blocked: "${path}" is not in allowWrite`,
+            path,
+            (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
+            signal,
+            timeoutSeconds,
+          );
+        },
+      }),
+    { action: "abort" },
+  );
