@@ -35,17 +35,12 @@ export function resetPermissionPrompts(pi: ExtensionAPI): void {
   promptQueues.delete(pi);
 }
 
-export async function showPermissionPrompt(
+export async function runPermissionRequest<T>(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  title: string,
-  originalValue: string,
-  validateValue: (value: string) => string | null,
-  timeoutSeconds?: number,
-): Promise<PermissionPromptResult> {
-  const aborted: PermissionPromptResult = { action: "abort", value: originalValue };
-  if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) return aborted;
-
+  run: (signal: AbortSignal) => Promise<T>,
+  aborted: T,
+): Promise<T> {
   const queue = getPromptQueue(pi);
   const operationSignal = ctx.signal;
   const signal = AbortSignal.any([
@@ -69,19 +64,30 @@ export async function showPermissionPrompt(
     const ready = await Promise.race([previous.then(() => true), cancelled]);
     signal.removeEventListener("abort", onAbort);
     if (!ready || signal.aborted) return aborted;
-    return await renderPermissionPrompt(
-      pi,
-      ctx,
-      title,
-      originalValue,
-      validateValue,
-      signal,
-      timeoutSeconds,
-    );
+    return await run(signal);
   } finally {
     signal.removeEventListener("abort", onAbort);
     release();
   }
+}
+
+export async function showPermissionPrompt(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  title: string,
+  originalValue: string,
+  validateValue: (value: string) => string | null,
+  timeoutSeconds?: number,
+): Promise<PermissionPromptResult> {
+  const aborted: PermissionPromptResult = { action: "abort", value: originalValue };
+  if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) return aborted;
+  return runPermissionRequest(
+    pi,
+    ctx,
+    (signal) =>
+      renderPermissionPrompt(pi, ctx, title, originalValue, validateValue, signal, timeoutSeconds),
+    aborted,
+  );
 }
 
 const validRule = (value: string, matches: boolean, target: string): string | null => {
