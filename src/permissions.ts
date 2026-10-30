@@ -10,29 +10,29 @@ export interface PermissionPromptResult {
   value: string;
 }
 
-interface PermissionPromptQueue {
+interface PermissionRequestQueue {
   tail: Promise<void>;
   controller: AbortController;
 }
 
-const promptQueues = new WeakMap<ExtensionAPI, PermissionPromptQueue>();
+const requestQueues = new WeakMap<ExtensionAPI, PermissionRequestQueue>();
 
-function getPromptQueue(pi: ExtensionAPI): PermissionPromptQueue {
-  let queue = promptQueues.get(pi);
+function getRequestQueue(pi: ExtensionAPI): PermissionRequestQueue {
+  let queue = requestQueues.get(pi);
   if (!queue) {
     queue = { tail: Promise.resolve(), controller: new AbortController() };
-    promptQueues.set(pi, queue);
+    requestQueues.set(pi, queue);
   }
   return queue;
 }
 
 export function cancelPermissionPrompts(pi: ExtensionAPI): void {
-  getPromptQueue(pi).controller.abort();
+  getRequestQueue(pi).controller.abort();
 }
 
 export function resetPermissionPrompts(pi: ExtensionAPI): void {
   cancelPermissionPrompts(pi);
-  promptQueues.delete(pi);
+  requestQueues.delete(pi);
 }
 
 export async function runPermissionRequest<T>(
@@ -41,7 +41,7 @@ export async function runPermissionRequest<T>(
   run: (signal: AbortSignal) => Promise<T>,
   aborted: T,
 ): Promise<T> {
-  const queue = getPromptQueue(pi);
+  const queue = getRequestQueue(pi);
   const operationSignal = ctx.signal;
   const signal = AbortSignal.any([
     queue.controller.signal,
