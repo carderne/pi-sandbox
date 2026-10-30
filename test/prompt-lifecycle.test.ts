@@ -8,7 +8,7 @@ import {
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 
-import * as prompts from "../src/ui.ts";
+import * as prompts from "../src/permissions.ts";
 
 type Component = {
   render(width: number): string[];
