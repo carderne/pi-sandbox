@@ -77,6 +77,14 @@ silently ignored there; use literal paths. A one-time warning is shown if your o
 config adds such globs (built-in defaults are excluded). Direct read/write/edit
 tools still honor globs on all platforms.
 
+Config files accept JSONC: `//` and `/* */` comments are allowed anywhere outside
+strings (trailing commas are not). When granting a new domain or path from the
+permission prompt, the extension appends only the new entry to the existing file,
+so your comments and formatting are kept. One caveat: if an array entry's line
+already ends in a `//` comment, appending after it would swallow the new entry
+into that comment, so the existing comment migrates to the last newly added
+entry instead.
+
 Note below that the order of precedence for filesystem read and write are opposite.
 
 ```json

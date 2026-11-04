@@ -155,10 +155,110 @@ test("permission writers parse JSONC configs and preserve other sections", () =>
 
   addWritePathToConfig(configPath, "/write");
 
-  const written = JSON.parse(readFileSync(configPath, "utf8"));
+  const raw = readFileSync(configPath, "utf8");
+  const written = JSON.parse(stripJsonComments(raw));
+  assert.match(raw, /\/\/ keep me/);
   assert.equal(written.enabled, true);
   assert.deepEqual(written.network.allowedDomains, ["keep.com"]);
   assert.deepEqual(written.filesystem.allowWrite, ["/write"]);
+});
+
+test("permission writers preserve comments when extending an existing array", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-config-"));
+  const configPath = join(root, "sandbox.json");
+  const original = [
+    "// project sandbox, keep this header",
+    "{",
+    '  "enabled": true /* global switch */,',
+    '  "network": {',
+    '    "allowedDomains": [',
+    '      "keep.com" // inline note',
+    "    ]",
+    "  },",
+    '  "logLevel": "debug" // closing member',
+    "}",
+    "",
+  ].join("\n");
+  writeFileSync(configPath, original);
+
+  addDomainToConfig(configPath, "new.org");
+
+  const raw = readFileSync(configPath, "utf8");
+  assert.match(raw, /inline note/);
+  assert.match(raw, /\/\* global switch \*\//);
+  assert.match(raw, /closing member/);
+  assert.match(raw, /project sandbox/);
+  const written = JSON.parse(stripJsonComments(raw));
+  assert.deepEqual(written.network.allowedDomains, ["keep.com", "new.org"]);
+  assert.equal(written.enabled, true);
+  assert.equal(written.logLevel, "debug");
+});
+
+test("permission writers preserve comments when inserting a missing member", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-config-"));
+  const configPath = join(root, "sandbox.json");
+  writeFileSync(
+    configPath,
+    '{\n  "network": {\n    "allowedDeny": ["deny.example"] // denied stuff\n  },\n  "enabled": false // off by default\n}\n',
+  );
+
+  addDomainToConfig(configPath, "example.com");
+
+  const raw = readFileSync(configPath, "utf8");
+  assert.match(raw, /denied stuff/);
+  assert.match(raw, /off by default/);
+  const written = JSON.parse(stripJsonComments(raw));
+  assert.deepEqual(written.network, {
+    allowedDeny: ["deny.example"],
+    allowedDomains: ["example.com"],
+  });
+});
+
+test("permission writers preserve comments when inserting a missing parent object", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-config-"));
+  const configPath = join(root, "sandbox.json");
+  writeFileSync(configPath, '{\n  "enabled": true // keep\n}\n');
+
+  addReadPathToConfig(configPath, "/read");
+  addWritePathToConfig(configPath, "/write");
+
+  const raw = readFileSync(configPath, "utf8");
+  assert.match(raw, /keep/);
+  const written = JSON.parse(stripJsonComments(raw));
+  assert.equal(written.enabled, true);
+  assert.deepEqual(written.filesystem.allowRead, ["/read"]);
+  assert.deepEqual(written.filesystem.allowWrite, ["/write"]);
+});
+
+test("permission-written configs remain parseable JSONC and load correctly", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-config-"));
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "cwd");
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(join(cwd, ".pi"), { recursive: true });
+  const configPath = join(cwd, ".pi", "sandbox.json");
+  writeFileSync(
+    configPath,
+    '{\n  // project sandbox\n  "network": { "allowedDomains": ["a.example"] }\n}\n',
+  );
+
+  addWritePathToConfig(configPath, "/w");
+  addReadPathToConfig(configPath, "/r");
+
+  try {
+    const loaded = loadConfig(cwd, true);
+    assert.deepEqual(loaded.network?.allowedDomains, ["a.example"]);
+    assert.deepEqual(loaded.filesystem?.allowWrite, ["/w"]);
+    assert.deepEqual(loaded.filesystem?.allowRead, ["/r"]);
+    assert.match(readFileSync(configPath, "utf8"), /project sandbox/);
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("permission writers refuse to overwrite an unparseable config", () => {
