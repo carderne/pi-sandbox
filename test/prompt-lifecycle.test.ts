@@ -23,7 +23,19 @@ function fixture(t: TestContext) {
   const mounts: { component: Component; placement?: string }[] = [];
   const active = new Set<Component>();
   const listeners = new Set<(data: string) => { consume?: boolean } | undefined>();
-  const pi = { events: { emit() {} } } as unknown as ExtensionAPI;
+  const events: {
+    name: string;
+    data: Record<string, unknown>;
+    active: number;
+    listeners: number;
+  }[] = [];
+  const pi = {
+    events: {
+      emit(name: string, data: Record<string, unknown>) {
+        events.push({ name, data, active: active.size, listeners: listeners.size });
+      },
+    },
+  } as unknown as ExtensionAPI;
   const editor = Object.create(CustomEditor.prototype) as CustomEditor;
   editor.focused = true;
   let focus: unknown = editor;
@@ -60,6 +72,14 @@ function fixture(t: TestContext) {
     mounts,
     active,
     listeners,
+    events,
+    get promptEvents() {
+      return events.filter(
+        ({ name }) =>
+          name === "pi-sandbox:permission-prompt-start" ||
+          name === "pi-sandbox:permission-prompt-end",
+      );
+    },
     editor,
     tui,
     focus: (target: unknown) => {
@@ -79,6 +99,59 @@ function fixture(t: TestContext) {
         timeout,
       ),
   };
+}
+
+function assertPromptLifecycle(
+  f: ReturnType<typeof fixture>,
+  ...phases: ("start" | "end")[]
+): void {
+  const events = f.promptEvents;
+  assert.deepEqual(
+    events.map(({ name }) => name),
+    phases.map((phase) => `pi-sandbox:permission-prompt-${phase}`),
+  );
+  const ids = new Set();
+  for (const [index, event] of events.entries()) {
+    assert.equal(typeof event.data.id, "string");
+    assert.equal(event.data.title, "Blocked");
+    // The previous widget is gone before a queued prompt can start, and end
+    // is emitted only after the widget and input listener have been removed.
+    assert.equal(event.active, 0);
+    assert.equal(event.listeners, 0);
+    if (phases[index] === "start") {
+      assert.equal(ids.has(event.data.id), false);
+      ids.add(event.data.id);
+    } else {
+      assert.deepEqual(event.data, events[index - 1]!.data);
+    }
+  }
+}
+
+for (const [key, action] of [
+  ["s", "session"],
+  ["P", "project"],
+  ["A", "global"],
+  ["\x1b", "abort"],
+] as const) {
+  test(
+    `permission prompt lifecycle brackets the ${action} choice`,
+    { timeout: 2000 },
+    async (t) => {
+      const f = fixture(t);
+      const pending = f.ask("resource");
+      await setImmediate();
+      assertPromptLifecycle(f, "start");
+      assert.deepEqual(
+        f.events.map(({ name }) => name),
+        ["pi-sandbox:permission-prompt-start", "request-attention"],
+      );
+      assert.deepEqual(f.events[1]!.data, { message: "Sandbox permission required" });
+      f.send(key);
+      assert.equal((await pending).action, action);
+      assertPromptLifecycle(f, "start", "end");
+      assert.equal(f.events.length, 3);
+    },
+  );
 }
 
 test(
@@ -119,6 +192,7 @@ test(
     const requests = [f.ask("one"), f.ask("two"), f.ask("three")];
     await setImmediate();
     assert.equal(f.mounts.length, 1);
+    assertPromptLifecycle(f, "start");
     for (let i = 0; i < 3; i++) {
       assert.equal(f.mounts.length, i + 1);
       assert.equal(f.active.size, 1);
@@ -131,6 +205,7 @@ test(
       ["one", "two", "three"].map((value) => ({ action: "session", value })),
     );
     assert.equal(f.active.size, 0);
+    assertPromptLifecycle(f, "start", "end", "start", "end", "start", "end");
   },
 );
 
@@ -147,12 +222,14 @@ test(
     controller.abort();
     assert.equal((await b).action, "abort");
     assert.equal(f.mounts.length, 1);
+    assertPromptLifecycle(f, "start");
     f.send("s");
     await a;
     await setImmediate();
     assert.equal(f.mounts.length, 2);
     f.send("s");
     assert.equal((await c).value, "next");
+    assertPromptLifecycle(f, "start", "end", "start", "end");
   },
 );
 
@@ -173,6 +250,7 @@ test(
     f.send("s");
     f.send("s");
     assert.equal((await b).action, "session");
+    assertPromptLifecycle(f, "start", "end", "start", "end");
   },
 );
 
@@ -194,7 +272,23 @@ test("already aborted and headless requests never mount", async (t) => {
     ).action,
     "abort",
   );
+  for (const mode of ["rpc", "json", "print"] as const) {
+    assert.equal(
+      (
+        await prompts.showPermissionPrompt(
+          f.pi,
+          { ...f.ctx, mode } as unknown as ExtensionContext,
+          "Blocked",
+          mode,
+          () => null,
+          0,
+        )
+      ).action,
+      "abort",
+    );
+  }
   assert.equal(f.mounts.length, 0);
+  assert.equal(f.events.length, 0);
 });
 
 test(
@@ -209,11 +303,13 @@ test(
     assert.equal(f.mounts.length, 1);
     assert.equal(f.active.size, 0);
     assert.equal((await f.ask("closed")).action, "abort");
+    assertPromptLifecycle(f, "start", "end");
     prompts.resetPermissionPrompts(f.pi);
     const next = f.ask("new");
     await setImmediate();
     f.send("s");
     assert.equal((await next).action, "session");
+    assertPromptLifecycle(f, "start", "end", "start", "end");
   },
 );
 
@@ -228,11 +324,14 @@ test(
     await setImmediate();
     assert.equal(parent.mounts.length, 1);
     assert.equal(child.mounts.length, 1);
+    assert.notEqual(parent.promptEvents[0]!.data.id, child.promptEvents[0]!.data.id);
     prompts.cancelPermissionPrompts(child.pi);
     assert.equal((await b).action, "abort");
     assert.equal(parent.active.size, 1);
     parent.send("s");
     assert.equal((await a).action, "session");
+    assertPromptLifecycle(parent, "start", "end");
+    assertPromptLifecycle(child, "start", "end");
   },
 );
 
@@ -244,6 +343,7 @@ test("timeout aborts one prompt and advances the queue", { timeout: 2000 }, asyn
   await setImmediate();
   f.send("s");
   assert.equal((await b).action, "session");
+  assertPromptLifecycle(f, "start", "end", "start", "end");
 });
 
 test(
@@ -299,6 +399,7 @@ test(
     assert.equal((await pending).action, "abort");
     assert.equal(f.listeners.size, 0);
     assert.equal(f.editor.focused, true);
+    assertPromptLifecycle(f, "start", "end");
   },
 );
 
@@ -318,6 +419,7 @@ test("missing focus inspection fails closed before mounting or listening", async
   await assert.rejects(f.ask("unsupported"), /focus inspection/);
   assert.equal(f.mounts.length, 0);
   assert.equal(f.listeners.size, 0);
+  assertPromptLifecycle(f, "start", "end");
 });
 
 test("UI failures release the queue without granting permission", { timeout: 2000 }, async (t) => {
@@ -335,6 +437,23 @@ test("UI failures release the queue without granting permission", { timeout: 200
   const b = f.ask("next");
   await assert.rejects(a, /render failed/);
   await setImmediate();
+  assertPromptLifecycle(f, "start", "end", "start");
   f.send("s");
   assert.equal((await b).action, "session");
+  assertPromptLifecycle(f, "start", "end", "start", "end");
+});
+
+test("widget cleanup failures still end the prompt lifecycle", { timeout: 2000 }, async (t) => {
+  const f = fixture(t);
+  const setWidget = f.ctx.ui.setWidget;
+  f.ctx.ui.setWidget = (...args) => {
+    setWidget(...args);
+    if (!args[1]) throw new Error("widget cleanup failed");
+  };
+  const pending = f.ask("failure");
+  const rejected = assert.rejects(pending, /widget cleanup failed/);
+  await setImmediate();
+  f.send("s");
+  await rejected;
+  assertPromptLifecycle(f, "start", "end");
 });

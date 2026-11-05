@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   CustomEditor,
   type ExtensionAPI,
@@ -237,12 +239,14 @@ async function renderPermissionPrompt(
   signal: AbortSignal,
   timeoutSeconds?: number,
 ): Promise<PermissionPromptResult> {
-  pi.events.emit("request-attention", { message: "Sandbox permission required" });
-
+  const prompt = { id: randomUUID(), title };
   const timeoutMs = permissionPromptTimeoutMs(timeoutSeconds);
   const options = permissionOptions(ctx.cwd);
   let cleanup = (): void => {};
   try {
+    // Inline widgets do not trigger Pi's ctx.ui dialog lifecycle events.
+    pi.events.emit("pi-sandbox:permission-prompt-start", { ...prompt });
+    pi.events.emit("request-attention", { message: "Sandbox permission required" });
     const result = await showPermissionWidget(ctx, (tui, theme, done) => {
       if (signal.aborted) {
         done({ action: "abort", value: originalValue });
@@ -468,6 +472,7 @@ async function renderPermissionPrompt(
     return result ?? { action: "abort", value: originalValue };
   } finally {
     cleanup();
+    pi.events.emit("pi-sandbox:permission-prompt-end", { ...prompt });
   }
 }
 
