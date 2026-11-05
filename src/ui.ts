@@ -243,6 +243,7 @@ async function renderPermissionPrompt(
   const options = permissionOptions(ctx.cwd);
   let cleanup = (): void => {};
   try {
+    pi.events.emit("herdr:blocked", { active: true, label: "Sandbox permission required" });
     const result = await showPermissionWidget(ctx, (tui, theme, done) => {
       if (signal.aborted) {
         done({ action: "abort", value: originalValue });
@@ -467,7 +468,11 @@ async function renderPermissionPrompt(
 
     return result ?? { action: "abort", value: originalValue };
   } finally {
-    cleanup();
+    try {
+      cleanup();
+    } finally {
+      pi.events.emit("herdr:blocked", { active: false });
+    }
   }
 }
 
