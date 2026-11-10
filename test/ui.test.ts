@@ -4,11 +4,11 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import assert from "node:assert/strict";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
+import { showPermissionPrompt } from "../src/permissions.ts";
 import {
   permissionOptions,
   permissionPromptRemainingSeconds,
   permissionPromptTimeoutMs,
-  showPermissionPrompt,
   warnIfLinuxUnenforcedGlobs,
 } from "../src/ui.ts";
 

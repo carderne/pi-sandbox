@@ -16,11 +16,19 @@ import {
   loadConfig,
 } from "./config.ts";
 import {
+  cancelPermissionPrompts,
+  resetPermissionPrompts,
+  type PermissionPromptResult,
+  promptDomainBlock,
+  promptReadBlock,
+  runPermissionRequest,
+  resolveWritePermission,
+} from "./permissions.ts";
+import {
   canonicalizePath,
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
-  resolveWritePermission,
 } from "./policy.ts";
 import {
   createSandboxedBashOps,
@@ -33,15 +41,9 @@ import {
   clearSessionAllowances,
 } from "./sandbox-runtime.ts";
 import {
-  cancelPermissionPrompts,
-  resetPermissionPrompts,
   formatSandboxConfiguration,
   formatSandboxStatus,
-  type PermissionPromptResult,
-  promptDomainBlock,
-  promptReadBlock,
-  showPermissionPrompt,
-  promptWriteBlock,
+  renderPermissionPrompt,
   warnIfAllDomainsAllowed,
   warnIfLinuxUnenforcedGlobs,
 } from "./ui.ts";
@@ -183,44 +185,58 @@ export default function (pi: ExtensionAPI) {
     if (await enableSandbox(ctx, false)) ctx.ui.notify("Sandbox enabled", "info");
   }
 
-  async function requestAccess({
+  const requestAccess = ({
     kind,
     target,
     ctx,
     reason,
     signal,
+    isAllowed,
   }: {
     kind: "domain" | "read" | "write";
     target: string;
-    ctx: Parameters<typeof showPermissionPrompt>[1];
+    ctx: Parameters<typeof renderPermissionPrompt>[1];
     reason?: string;
     signal?: AbortSignal;
-  }) {
-    const config = loadConfig(ctx.cwd, projectTrusted);
-    const configKey =
-      kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
-    const title = `Add ${target} to ${configKey}?`;
-    const choice = await showPermissionPrompt(
+    isAllowed?: () => boolean;
+  }) =>
+    runPermissionRequest<PermissionPromptResult | undefined>(
       pi,
       ctx,
-      reason ? `${title}\nReason: ${reason}` : title,
-      target,
-      (value) => {
-        if (!value) return "Rule cannot be empty.";
-        const matches =
-          kind === "domain"
-            ? domainIsAllowed(target, [value])
-            : matchesPattern(target, [value], ctx.cwd);
-        return matches ? null : `Rule must match "${target}".`;
+      async (requestSignal) => {
+        if (signal?.aborted) throw new Error("Access request cancelled.");
+        if (isAllowed?.()) return;
+        if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) {
+          return { action: "abort", value: target };
+        }
+        const config = loadConfig(ctx.cwd, projectTrusted);
+        const configKey =
+          kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
+        const title = `Add ${target} to ${configKey}?`;
+        const choice = await renderPermissionPrompt(
+          pi,
+          ctx,
+          reason ? `${title}\nReason: ${reason}` : title,
+          target,
+          (value) => {
+            if (!value) return "Rule cannot be empty.";
+            const matches =
+              kind === "domain"
+                ? domainIsAllowed(target, [value])
+                : matchesPattern(target, [value], ctx.cwd);
+            return matches ? null : `Rule must match "${target}".`;
+          },
+          requestSignal,
+          config.permissionPromptTimeoutSeconds,
+        );
+        if (signal?.aborted) throw new Error("Access request cancelled.");
+        if (choice.action !== "abort") {
+          await applyChoice(choice.action, kind, choice.value, ctx.cwd);
+        }
+        return choice;
       },
-      config.permissionPromptTimeoutSeconds,
+      { action: "abort", value: target },
     );
-    if (signal?.aborted) throw new Error("Access request cancelled.");
-    if (choice.action !== "abort") {
-      await applyChoice(choice.action, kind, choice.value, ctx.cwd);
-    }
-    return choice;
-  }
 
   function registerAccessTools() {
     pi.registerTool({
@@ -277,33 +293,37 @@ export default function (pi: ExtensionAPI) {
           throw new Error("Target and reason must not be empty.");
         if (signal?.aborted) throw new Error("Access request cancelled.");
         const target = kind === "domain" ? input.trim() : canonicalizePath(input, ctx.cwd);
-        const config = loadConfig(ctx.cwd, projectTrusted);
-        if (
-          (kind === "write" &&
-            matchesPattern(target, config.filesystem?.denyWrite ?? [], ctx.cwd)) ||
-          (kind === "domain" && domainIsAllowed(target, config.network?.deniedDomains ?? []))
-        ) {
-          throw new Error(`Sandbox: ${kind} access to "${target}" is explicitly denied.`);
-        }
-        const effective = resolveAllowances(config, allowances);
-        const alreadyAllowed =
-          kind === "domain"
+        function isAllowed() {
+          const config = loadConfig(ctx.cwd, projectTrusted);
+          if (
+            (kind === "write" &&
+              matchesPattern(target, config.filesystem?.denyWrite ?? [], ctx.cwd)) ||
+            (kind === "domain" && domainIsAllowed(target, config.network?.deniedDomains ?? []))
+          ) {
+            throw new Error(`Sandbox: ${kind} access to "${target}" is explicitly denied.`);
+          }
+          const effective = resolveAllowances(config, allowances);
+          return kind === "domain"
             ? domainIsAllowed(target, effective.domains)
             : matchesPattern(
                 target,
                 kind === "read" ? effective.readPaths : effective.writePaths,
                 ctx.cwd,
               );
-        if (alreadyAllowed) {
-          return {
-            content: [
-              { type: "text", text: `Access already allowed: ${kind} ${JSON.stringify(target)}.` },
-            ],
-            details: { kind, target, alreadyAllowed: true },
-          };
         }
+        const alreadyAllowedResult = () => ({
+          content: [
+            {
+              type: "text" as const,
+              text: `Access already allowed: ${kind} ${JSON.stringify(target)}.`,
+            },
+          ],
+          details: { kind, target, alreadyAllowed: true },
+        });
+        if (isAllowed()) return alreadyAllowedResult();
         if (!ctx.hasUI) throw new Error("Sandbox access requests require an approval UI.");
-        const choice = await requestAccess({ kind, target, ctx, reason, signal });
+        const choice = await requestAccess({ kind, target, ctx, reason, signal, isAllowed });
+        if (!choice) return alreadyAllowedResult();
         if (choice.action === "abort")
           throw new Error(`Sandbox access request denied for "${target}".`);
         return {
@@ -376,6 +396,11 @@ export default function (pi: ExtensionAPI) {
           ctx,
           domain,
           config.permissionPromptTimeoutSeconds,
+          async (choice) => {
+            if (choice.action !== "abort") {
+              await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
+            }
+          },
         );
         if (choice.action === "abort") {
           return {
@@ -387,7 +412,6 @@ export default function (pi: ExtensionAPI) {
             },
           };
         }
-        await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
       }
     }
     return {
@@ -413,6 +437,11 @@ export default function (pi: ExtensionAPI) {
             ctx,
             domain,
             config.permissionPromptTimeoutSeconds,
+            async (choice) => {
+              if (choice.action !== "abort") {
+                await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
+              }
+            },
           );
           if (choice.action === "abort") {
             return {
@@ -420,7 +449,6 @@ export default function (pi: ExtensionAPI) {
               reason: `Network access to "${domain}" is blocked (not in allowedDomains).`,
             };
           }
-          await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
         }
       }
     }
@@ -428,11 +456,20 @@ export default function (pi: ExtensionAPI) {
     if (isToolCallEventType("read", event)) {
       const path = canonicalizePath(event.input.path, ctx.cwd);
       if (!matchesPattern(path, effectiveReadPaths(ctx.cwd), ctx.cwd)) {
-        const choice = await promptReadBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
+        const choice = await promptReadBlock(
+          pi,
+          ctx,
+          path,
+          config.permissionPromptTimeoutSeconds,
+          async (choice) => {
+            if (choice.action !== "abort") {
+              await applyChoice(choice.action, "read", choice.value, ctx.cwd);
+            }
+          },
+        );
         if (choice.action === "abort") {
           return { block: true, reason: `Sandbox: read access denied for "${path}"` };
         }
-        await applyChoice(choice.action, "read", choice.value, ctx.cwd);
         return;
       }
     }
@@ -444,7 +481,9 @@ export default function (pi: ExtensionAPI) {
         allowWrite: effectiveWritePaths(ctx.cwd),
         denyWrite: config.filesystem?.denyWrite ?? [],
         baseCwd: ctx.cwd,
-        prompt: (path) => promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
+        pi,
+        ctx,
+        timeoutSeconds: config.permissionPromptTimeoutSeconds,
         saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
       });
       if (writePermission.action === "deny") {
@@ -529,7 +568,7 @@ export default function (pi: ExtensionAPI) {
       const configKey =
         kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
       const choice = await requestAccess({ kind, target, ctx });
-      if (choice.action === "abort") {
+      if (!choice || choice.action === "abort") {
         ctx.ui.notify("Allow cancelled", "info");
         return;
       }
