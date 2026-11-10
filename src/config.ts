@@ -119,6 +119,8 @@ export function mergeConfigLayers(
 
   return {
     ...merged,
+    // Cross-sandbox signals can affect unrelated host processes; only global config may grant them.
+    allowProcessSignals: globalConfig.allowProcessSignals === true,
     network: {
       ...merged.network,
       allowedDomains:
