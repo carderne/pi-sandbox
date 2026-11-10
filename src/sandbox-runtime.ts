@@ -140,6 +140,7 @@ export function buildRuntimeConfig(
     credentials: config.credentials,
     enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
     allowBrowserProcess: config.allowBrowserProcess,
+    allowProcessSignals: config.allowProcessSignals,
     allowPty: config.allowPty,
     enableWeakerNetworkIsolation: true,
     allowAppleEvents: config.allowAppleEvents,

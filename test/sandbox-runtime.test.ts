@@ -99,6 +99,29 @@ test("buildRuntimeConfig forwards allowAppleEvents to the runtime", () => {
   assert.equal(runtime.allowAppleEvents, true);
 });
 
+test("cross-sandbox process signals require global opt-in", () => {
+  const projectOptIn = { allowProcessSignals: true };
+  assert.equal(
+    buildRuntimeConfig(mergeConfigLayers(DEFAULT_CONFIG, {}, {})).allowProcessSignals,
+    false,
+  );
+  assert.equal(
+    buildRuntimeConfig(mergeConfigLayers(DEFAULT_CONFIG, {}, projectOptIn)).allowProcessSignals,
+    false,
+  );
+  assert.equal(
+    buildRuntimeConfig(
+      mergeConfigLayers(DEFAULT_CONFIG, { allowProcessSignals: false }, projectOptIn),
+    ).allowProcessSignals,
+    false,
+  );
+  assert.equal(
+    buildRuntimeConfig(mergeConfigLayers(DEFAULT_CONFIG, { allowProcessSignals: true }, {}))
+      .allowProcessSignals,
+    true,
+  );
+});
+
 function withSshAuthSock<T>(value: string | undefined, fn: () => T): T {
   const previous = process.env.SSH_AUTH_SOCK;
   if (value === undefined) delete process.env.SSH_AUTH_SOCK;
