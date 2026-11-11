@@ -215,6 +215,44 @@ test("buildRuntimeConfig does not allow a missing SSH_AUTH_SOCK path", () => {
   });
 });
 
+test("buildRuntimeConfig makes glob patterns absolute", () => {
+  const cwd = realpathSync.native(mkdtempSync(join(tmpdir(), "pi-sandbox-glob-")));
+  const runtime = buildRuntimeConfig(
+    {
+      ...DEFAULT_CONFIG,
+      filesystem: {
+        denyRead: [],
+        allowRead: ["."],
+        allowWrite: ["."],
+        denyWrite: ["*.pem", ".env.*"],
+      },
+    },
+    undefined,
+    process.platform,
+    cwd,
+  );
+
+  // A relative glob never matches, because the runtime compares against
+  // absolute paths.
+  assert.ok(!runtime.filesystem?.denyWrite?.includes("*.pem"));
+  assert.ok(runtime.filesystem?.denyWrite?.includes(join(cwd, "*.pem")));
+  assert.ok(runtime.filesystem?.denyWrite?.includes(join(cwd, ".env.*")));
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("buildRuntimeConfig leaves an already absolute glob alone", () => {
+  const runtime = buildRuntimeConfig(
+    {
+      ...DEFAULT_CONFIG,
+      filesystem: { denyRead: [], allowRead: ["."], allowWrite: ["."], denyWrite: ["/etc/*.conf"] },
+    },
+    undefined,
+    process.platform,
+    "/",
+  );
+  assert.ok(runtime.filesystem?.denyWrite?.includes("/etc/*.conf"));
+});
+
 test("buildRuntimeConfig retains literal and canonical allowRead paths", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-sandbox-allow-read-"));
   const directory = join(root, "directory");
@@ -268,7 +306,18 @@ test("buildRuntimeConfig preserves literal and canonical paths in all filesystem
       "darwin",
       root,
     );
-    const expected = [...new Set([symlink, realpathSync(directory), directory, "*.key"])];
+    // A glob cannot be realpath'd, but it still has to be absolute or the
+    // runtime never matches it; both prefix forms are kept because /var is a
+    // symlink into /private on macOS.
+    const expected = [
+      ...new Set([
+        symlink,
+        realpathSync(directory),
+        directory,
+        join(root, "*.key"),
+        join(realpathSync(root), "*.key"),
+      ]),
+    ];
 
     for (const list of ["denyRead", "allowRead", "allowWrite", "denyWrite"] as const) {
       assert.deepEqual(runtime.filesystem?.[list], expected, list);

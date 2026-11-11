@@ -3,7 +3,7 @@ import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-ru
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -47,10 +47,34 @@ function resolveUnixSockets(config: SandboxConfig): string[] | undefined {
   return unique(sockets);
 }
 
+/**
+ * Resolve a glob pattern to absolute form without expanding it.
+ *
+ * The runtime matches patterns against absolute paths, so a relative pattern
+ * such as `*.pem` matches nothing at all. The segments before the first glob
+ * are a real directory, so they are canonicalized the same way a plain path
+ * would be; both the resolved and canonical forms are kept because on macOS
+ * `/tmp` and `/var` are symlinks into `/private`.
+ */
+function absoluteGlobPatterns(pattern: string, baseCwd?: string): string[] {
+  const expanded = pattern.replace(/^~(?=$|\/)/, homedir());
+  const base = baseCwd ?? process.cwd();
+  const absolute = isAbsolute(expanded) ? expanded : resolve(base, expanded);
+
+  const segments = absolute.split("/");
+  const firstGlob = segments.findIndex((segment) => segment.includes("*"));
+  if (firstGlob <= 0) return [absolute];
+
+  const prefix = segments.slice(0, firstGlob).join("/");
+  const canonicalPrefix = canonicalizePath(prefix, baseCwd);
+  if (canonicalPrefix === prefix) return [absolute];
+  return [absolute, [canonicalPrefix, ...segments.slice(firstGlob)].join("/")];
+}
+
 const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
   unique(
     paths.flatMap((path) => {
-      if (path.includes("*")) return [path];
+      if (path.includes("*")) return absoluteGlobPatterns(path, baseCwd);
       const absolutePath = resolve(baseCwd ?? process.cwd(), path.replace(/^~(?=$|\/)/, homedir()));
       return [absolutePath, canonicalizePath(path, baseCwd)];
     }),
