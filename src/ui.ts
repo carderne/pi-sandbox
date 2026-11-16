@@ -114,7 +114,7 @@ export async function showPermissionPrompt(
   timeoutSeconds?: number,
 ): Promise<PermissionPromptResult> {
   const aborted: PermissionPromptResult = { action: "abort", value: originalValue };
-  if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) return aborted;
+  if (!ctx.hasUI) return aborted;
 
   const queue = getPromptQueue(pi);
   const operationSignal = ctx.signal;
@@ -139,19 +139,63 @@ export async function showPermissionPrompt(
     const ready = await Promise.race([previous.then(() => true), cancelled]);
     signal.removeEventListener("abort", onAbort);
     if (!ready || signal.aborted) return aborted;
-    return await renderPermissionPrompt(
-      pi,
-      ctx,
-      title,
-      originalValue,
-      validateValue,
-      signal,
-      timeoutSeconds,
-    );
+    // Hosts without a terminal keyboard (PI WEB binds extension contexts in
+    // rpc mode) cannot render the inline widget, but they do implement
+    // ctx.ui.select(). Both paths run inside the same queue and cancellation
+    // signal, so disabling or resetting the sandbox still aborts the prompt.
+    const result =
+      ctx.mode !== undefined && ctx.mode !== "tui"
+        ? await renderPermissionDialog(pi, ctx, title, originalValue, signal, timeoutSeconds)
+        : await renderPermissionPrompt(
+            pi,
+            ctx,
+            title,
+            originalValue,
+            validateValue,
+            signal,
+            timeoutSeconds,
+          );
+    // An answer that raced a cancellation, or one the TUI would have rejected,
+    // must not grant anything.
+    if (signal.aborted) return aborted;
+    if (result.action !== "abort" && validateValue(result.value) !== null) return aborted;
+    return result;
   } finally {
     signal.removeEventListener("abort", onAbort);
     release();
   }
+}
+
+/**
+ * Dialog prompt for hosts that expose Pi's select/confirm/input dialogs but no
+ * terminal widget surface (rpc mode, e.g. PI WEB). Same choices and auto-abort
+ * semantics as the TUI widget below. There is no inline rule editor, so the
+ * requested target is the rule that gets saved.
+ */
+async function renderPermissionDialog(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  title: string,
+  originalValue: string,
+  signal: AbortSignal,
+  timeoutSeconds?: number,
+): Promise<PermissionPromptResult> {
+  pi.events.emit("request-attention", { message: "Sandbox permission required" });
+  const options = permissionOptions(ctx.cwd);
+  const labels = options.map((option) =>
+    option.hint === undefined ? option.label : `${option.label}  ${option.hint}`,
+  );
+  const timeoutMs = permissionPromptTimeoutMs(timeoutSeconds);
+  const picked = await ctx.ui.select(title, labels, {
+    signal,
+    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
+  });
+  if (signal.aborted) return { action: "abort", value: originalValue };
+  const index = picked === undefined ? -1 : labels.indexOf(picked);
+  const option = index === -1 ? undefined : options[index];
+  if (option === undefined || option.action === "abort")
+    return { action: "abort", value: originalValue };
+  return { action: option.action, value: originalValue };
 }
 
 type PermissionWidget = Component & { focused: boolean; dispose(): void };

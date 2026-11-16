@@ -166,6 +166,17 @@ or set it to `0` to wait indefinitely. A timeout never grants permission.
 - Allow for this project — written to `.pi/sandbox.json`
 - Allow for all projects — written to Pi's global agent directory (by default, `~/.pi/agent/sandbox.json`; respects `PI_CODING_AGENT_DIR`)
 
+### Hosts without a terminal (RPC)
+
+Hosts that render Pi's extension dialogs instead of a terminal — for example PI
+WEB — cannot mount the inline permission widget. When `ctx.mode` is set and is
+not `"tui"` (and `ctx.hasUI` is true), the same prompt is asked with
+`ctx.ui.select()` using the four options above, the same per-instance queue, the
+same cancellation behavior and the same timeout. Aborting, dismissing or
+cancelling still grants nothing. A dialog has no inline rule editor, so the
+requested target is saved as the rule; edit `.pi/sandbox.json` or the global
+`sandbox.json` afterwards for globs or a narrower rule.
+
 **Session allowances** are held in memory only. They are never written to disk
 and the agent has no way to read or modify them. They are reset when the
 extension reloads or pi restarts. Parent agents and subagents have separate
