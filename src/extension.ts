@@ -185,7 +185,7 @@ export default function (pi: ExtensionAPI) {
     if (await enableSandbox(ctx, false)) ctx.ui.notify("Sandbox enabled", "info");
   }
 
-  async function requestAccess({
+  const requestAccess = ({
     kind,
     target,
     ctx,
@@ -199,8 +199,8 @@ export default function (pi: ExtensionAPI) {
     reason?: string;
     signal?: AbortSignal;
     isAllowed?: () => boolean;
-  }) {
-    return runPermissionRequest<PermissionPromptResult | undefined>(
+  }) =>
+    runPermissionRequest<PermissionPromptResult | undefined>(
       pi,
       ctx,
       async (requestSignal) => {
@@ -237,7 +237,6 @@ export default function (pi: ExtensionAPI) {
       },
       { action: "abort", value: target },
     );
-  }
 
   function registerAccessTools() {
     pi.registerTool({
