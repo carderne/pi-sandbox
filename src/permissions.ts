@@ -82,14 +82,26 @@ export async function showPermissionPrompt(
   originalValue: string,
   validateValue: (value: string) => string | null,
   timeoutSeconds?: number,
+  onChoice?: (choice: PermissionPromptResult) => Promise<void>,
 ): Promise<PermissionPromptResult> {
   const aborted: PermissionPromptResult = { action: "abort", value: originalValue };
   if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) return aborted;
   return runPermissionRequest(
     pi,
     ctx,
-    (signal) =>
-      renderPermissionPrompt(pi, ctx, title, originalValue, validateValue, signal, timeoutSeconds),
+    async (signal) => {
+      const choice = await renderPermissionPrompt(
+        pi,
+        ctx,
+        title,
+        originalValue,
+        validateValue,
+        signal,
+        timeoutSeconds,
+      );
+      await onChoice?.(choice);
+      return choice;
+    },
     aborted,
   );
 }
@@ -104,6 +116,7 @@ export function promptDomainBlock(
   ctx: ExtensionContext,
   domain: string,
   timeoutSeconds?: number,
+  onChoice?: (choice: PermissionPromptResult) => Promise<void>,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
     pi,
@@ -112,6 +125,7 @@ export function promptDomainBlock(
     domain,
     (value) => validRule(value, domainIsAllowed(domain, [value]), `domain "${domain}"`),
     timeoutSeconds,
+    onChoice,
   );
 }
 
@@ -120,6 +134,7 @@ export function promptReadBlock(
   ctx: ExtensionContext,
   path: string,
   timeoutSeconds?: number,
+  onChoice?: (choice: PermissionPromptResult) => Promise<void>,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
     pi,
@@ -128,6 +143,7 @@ export function promptReadBlock(
     path,
     (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
     timeoutSeconds,
+    onChoice,
   );
 }
 
@@ -141,15 +157,26 @@ export const resolveWritePermission = ({
   ctx: ExtensionContext;
   timeoutSeconds?: number;
 }) =>
-  resolveWritePolicy({
-    ...policy,
-    prompt: (path) =>
-      showPermissionPrompt(
-        pi,
-        ctx,
-        `📝 Write blocked: "${path}" is not in allowWrite`,
-        path,
-        (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
-        timeoutSeconds,
-      ),
-  });
+  runPermissionRequest(
+    pi,
+    ctx,
+    async (signal) =>
+      resolveWritePolicy({
+        ...policy,
+        prompt: async (path) => {
+          if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) {
+            return { action: "abort", value: path };
+          }
+          return renderPermissionPrompt(
+            pi,
+            ctx,
+            `📝 Write blocked: "${path}" is not in allowWrite`,
+            path,
+            (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
+            signal,
+            timeoutSeconds,
+          );
+        },
+      }),
+    { action: "abort" },
+  );
