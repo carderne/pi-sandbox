@@ -112,6 +112,38 @@ test(
 );
 
 test(
+  "apply the approved access rule before the next request proceeds",
+  { timeout: 2000 },
+  async (t) => {
+    const f = fixture(t);
+    let finishApproval!: () => void;
+    const approval = new Promise<void>((resolve) => {
+      finishApproval = resolve;
+    });
+    const first = prompts.showPermissionPrompt(
+      f.pi,
+      f.ctx as unknown as ExtensionContext,
+      "First",
+      "one",
+      () => null,
+      0,
+      async () => approval,
+    );
+    const second = f.ask("two");
+    await setImmediate();
+    f.send("s");
+    await setImmediate();
+    assert.equal(f.mounts.length, 1, "The next prompt must wait until the approval takes effect");
+    finishApproval();
+    await first;
+    await setImmediate();
+    assert.equal(f.mounts.length, 2);
+    f.send("s");
+    assert.equal((await second).action, "session");
+  },
+);
+
+test(
   "concurrent prompts mount one at a time and return their own answers",
   { timeout: 2000 },
   async (t) => {
