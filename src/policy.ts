@@ -13,6 +13,42 @@ export function decideWritePolicy(
   return "allow";
 }
 
+/**
+ * Read access follows the same precedence as the OS sandbox: the most specific
+ * matching rule wins, and allowRead wins a tie. A denyRead entry inside an
+ * allowed area (`.env` under `.`) is a hard deny; a broad one (`/Users`) only
+ * means "not allowed", so paths outside every allow list are still prompted.
+ */
+export function decideReadPolicy(
+  path: string,
+  allowRead: string[],
+  denyRead: string[],
+  baseCwd: string = process.cwd(),
+): "allow" | "deny" | "prompt" {
+  const specificity = (patterns: string[]) =>
+    Math.max(
+      -1,
+      ...patterns
+        .filter((pattern) => matchesPattern(path, [pattern], baseCwd))
+        .map((pattern) => patternSpecificity(pattern, baseCwd)),
+    );
+  const allow = specificity(allowRead);
+  if (allow < 0) return "prompt";
+  return specificity(denyRead) > allow ? "deny" : "allow";
+}
+
+/** Depth of a pattern's fixed part; a glob ranks above its own base directory. */
+function patternSpecificity(pattern: string, baseCwd: string): number {
+  const depth = (path: string) => path.split("/").filter(Boolean).length;
+  if (!pattern.includes("*")) return 2 * depth(canonicalizePath(pattern, baseCwd));
+  const segments = resolveGlobPattern(pattern, baseCwd).at(-1)!.split("/");
+  const base = segments.slice(
+    0,
+    segments.findIndex((segment) => segment.includes("*")),
+  );
+  return 2 * depth(base.join("/")) + 1;
+}
+
 export async function resolveWritePermission({
   path,
   allowWrite,

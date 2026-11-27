@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   allowsAllDomains,
   canonicalizePath,
+  decideReadPolicy,
   decideWritePolicy,
   domainIsAllowed,
   extractDomainsFromCommand,
@@ -168,4 +169,35 @@ test("canonicalizes symlinks and nonexistent descendants", () => {
     canonicalizePath(join(link, "new", "file")),
     join(canonicalizePath(real), "new", "file"),
   );
+});
+
+test("read policy: the most specific matching rule wins, allowRead wins a tie", () => {
+  const root = canonicalizePath(mkdtempSync(join(tmpdir(), "pi-sandbox-read-policy-")));
+  const project = join(root, "project");
+  mkdirSync(project);
+  const decide = (path: string, allowRead: string[], denyRead: string[]) =>
+    decideReadPolicy(join(project, path), allowRead, denyRead, project);
+
+  // Denies carved out of an allowed area are hard denies.
+  assert.equal(decide(".env", ["."], [".env"]), "deny");
+  assert.equal(decide("secret-dir/x.txt", ["."], ["secret-dir"]), "deny");
+  assert.equal(decide("nested/a.pem", ["."], ["*.pem"]), "deny");
+  assert.equal(decide(".env.local", ["."], [".env.*"]), "deny");
+  assert.equal(decide("normal.txt", ["."], [".env", "*.pem", "secret-dir"]), "allow");
+
+  // A broad deny is re-opened by a narrower allow.
+  assert.equal(decide("src/a.ts", ["."], [root]), "allow");
+  // A narrower allow inside a deny re-opens it again.
+  assert.equal(
+    decide("secret-dir/public/a.txt", [".", "secret-dir/public"], ["secret-dir"]),
+    "allow",
+  );
+  assert.equal(decide("secret-dir/x.txt", [".", "secret-dir/public"], ["secret-dir"]), "deny");
+  // An allow equal to the deny wins the tie (explicit grants still work).
+  assert.equal(decide(".env", [".", ".env"], [".env"]), "allow");
+  assert.equal(decide("a.pem", [".", "*.pem"], ["*.pem"]), "allow");
+
+  // Outside every allow list: prompted, whether or not a broad deny matches.
+  assert.equal(decideReadPolicy(join(root, "other.txt"), [project], [root], project), "prompt");
+  assert.equal(decideReadPolicy(join(root, "other.txt"), [project], [], project), "prompt");
 });
