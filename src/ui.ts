@@ -139,10 +139,7 @@ export async function showPermissionPrompt(
     const ready = await Promise.race([previous.then(() => true), cancelled]);
     signal.removeEventListener("abort", onAbort);
     if (!ready || signal.aborted) return aborted;
-    // Hosts without a terminal keyboard (PI WEB binds extension contexts in
-    // rpc mode) cannot render the inline widget, but they do implement
-    // ctx.ui.select(). Both paths run inside the same queue and cancellation
-    // signal, so disabling or resetting the sandbox still aborts the prompt.
+    // Non-TUI hosts (e.g. rpc) can't mount the widget; fall back to a select dialog.
     const result =
       ctx.mode !== undefined && ctx.mode !== "tui"
         ? await renderPermissionDialog(pi, ctx, title, originalValue, signal, timeoutSeconds)
@@ -155,8 +152,7 @@ export async function showPermissionPrompt(
             signal,
             timeoutSeconds,
           );
-    // An answer that raced a cancellation, or one the TUI would have rejected,
-    // must not grant anything.
+    // Late or invalid answers grant nothing.
     if (signal.aborted) return aborted;
     if (result.action !== "abort" && validateValue(result.value) !== null) return aborted;
     return result;
@@ -166,12 +162,7 @@ export async function showPermissionPrompt(
   }
 }
 
-/**
- * Dialog prompt for hosts that expose Pi's select/confirm/input dialogs but no
- * terminal widget surface (rpc mode, e.g. PI WEB). Same choices and auto-abort
- * semantics as the TUI widget below. There is no inline rule editor, so the
- * requested target is the rule that gets saved.
- */
+/** Select-dialog prompt for non-TUI hosts. Saves the requested target as-is. */
 async function renderPermissionDialog(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
