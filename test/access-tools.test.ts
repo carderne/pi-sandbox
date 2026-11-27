@@ -203,3 +203,34 @@ test("network.disabled skips domain preflight and treats domain access requests 
   assert.equal(userBashResult?.result, undefined);
   assert.equal(f.prompts(), 0);
 });
+
+test("denyRead inside an allowed area blocks read and edit without prompting", async (t) => {
+  const f = await fixture(t, true, {
+    enabled: true,
+    filesystem: {
+      denyRead: [".env", "secret-dir", "*.pem"],
+      allowRead: ["."],
+      allowWrite: ["."],
+      denyWrite: [],
+    },
+  });
+  const call = (toolName: string, path: string) =>
+    f.handlers.get("tool_call")!(
+      { toolName, input: toolName === "edit" ? { path, edits: [] } : { path } },
+      f.ctx,
+    );
+  for (const rel of [".env", "secret-dir/x.txt", "nested/a.pem"]) {
+    const path = join(f.root, rel);
+    for (const toolName of ["read", "edit"]) {
+      const result = await call(toolName, path);
+      assert.equal(result?.block, true, `${toolName} ${rel}`);
+      assert.match(result.reason, /in denyRead/);
+    }
+    await assert.rejects(
+      f.execute("sandbox_request_access", { kind: "read", target: path, reason: "test" }),
+      /explicitly denied/,
+    );
+  }
+  assert.equal(await call("read", join(f.root, "normal.txt")), undefined);
+  assert.equal(f.prompts(), 0);
+});

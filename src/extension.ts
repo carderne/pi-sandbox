@@ -14,9 +14,11 @@ import {
   addWritePathToConfig,
   getConfigPaths,
   loadConfig,
+  type SandboxConfig,
 } from "./config.ts";
 import {
   canonicalizePath,
+  decideReadPolicy,
   domainIsAllowed,
   extractDomainsFromCommand,
   matchesPattern,
@@ -69,6 +71,8 @@ export default function (pi: ExtensionAPI) {
     resolveAllowances(loadConfig(cwd, projectTrusted), allowances);
   const effectiveDomains = (cwd: string) => effectiveAllowances(cwd).domains;
   const effectiveReadPaths = (cwd: string) => effectiveAllowances(cwd).readPaths;
+  const readPolicy = (path: string, cwd: string, config: SandboxConfig) =>
+    decideReadPolicy(path, effectiveReadPaths(cwd), config.filesystem?.denyRead ?? [], cwd);
   const effectiveWritePaths = (cwd: string) => effectiveAllowances(cwd).writePaths;
 
   async function refreshSandbox(cwd: string): Promise<void> {
@@ -247,8 +251,8 @@ export default function (pi: ExtensionAPI) {
       label: "Sandbox status",
       description:
         "Inspect sandbox enabled state, effective allow and deny rules, and session-only grants. " +
-        "Relative filesystem rules are resolved against cwd. Write access also grants read access; " +
-        "denyWrite and deniedDomains override allows, while allowRead overrides denyRead.",
+        "Relative filesystem rules are resolved against cwd. Write access also grants read access. " +
+        "denyWrite and deniedDomains override allows; for reads, the more specific of allowRead and denyRead wins.",
       parameters: Type.Object({}),
       async execute(_id, _params, _signal, _onUpdate, ctx) {
         const config = loadConfig(ctx.cwd, projectTrusted);
@@ -298,6 +302,7 @@ export default function (pi: ExtensionAPI) {
         const target = kind === "domain" ? input.trim() : canonicalizePath(input, ctx.cwd);
         const config = loadConfig(ctx.cwd, projectTrusted);
         if (
+          (kind === "read" && readPolicy(target, ctx.cwd, config) === "deny") ||
           (kind === "write" &&
             matchesPattern(target, config.filesystem?.denyWrite ?? [], ctx.cwd)) ||
           (kind === "domain" &&
@@ -458,9 +463,19 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    if (isToolCallEventType("read", event)) {
-      const path = canonicalizePath(event.input.path, ctx.cwd);
-      if (!matchesPattern(path, effectiveReadPaths(ctx.cwd), ctx.cwd)) {
+    if (isToolCallEventType("read", event) || isToolCallEventType("edit", event)) {
+      // edit returns file content to the model, so it needs read access too.
+      const path = canonicalizePath((event.input as { path: string }).path, ctx.cwd);
+      const readPermission = readPolicy(path, ctx.cwd, config);
+      if (readPermission === "deny") {
+        return {
+          block: true,
+          reason:
+            `Sandbox: read access denied for "${path}" (in denyRead). ` +
+            `To change this, edit denyRead in:\n  ${projectPath}\n  ${globalPath}`,
+        };
+      }
+      if (readPermission === "prompt" && isToolCallEventType("read", event)) {
         const choice = await promptReadBlock(
           pi,
           ctx,

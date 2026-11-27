@@ -98,8 +98,9 @@ Note below that the order of precedence for filesystem read and write are opposi
   "filesystem": {
     // For READS:
     // - ANY read is prompted unless the path is in allowRead or allowWrite
-    // - Granting a prompt adds to allowRead, which overrides denyRead
-    // - denyRead is not a hard-block; it just marks regions as denied by default
+    // - Granting a prompt adds to allowRead, which overrides a broader denyRead
+    // - The most specific rule wins: a denyRead entry inside an allowed area
+    //   (e.g. ".env" under ".") is a hard block; a broad one (e.g. "/Users") is not
     "denyRead": ["/Users", "/home"],
     "allowRead": [".", "~/.config", "~/.local", "Library"],
 
@@ -181,6 +182,7 @@ consistently.
 | Domain not in `allowedDomains` | Prompted (bash and `!cmd`, unless `sandboxUserShell` is disabled) |
 | Path not in `allowRead` or `allowWrite` | Prompted (read tool); granting adds to `allowRead` |
 | Path not in `allowWrite` | Prompted (write/edit tools) |
+| Path in `denyRead` inside an allowed area | Hard-blocked (bash and read/edit tools), no prompt |
 | Path in `denyWrite` | Hard-blocked, no prompt |
 | Domain in `deniedDomains` | Hard-blocked at OS level, no prompt |
 
@@ -234,8 +236,11 @@ this setting alone does not make the SSH agent usable.
 > **⚠️ Read and write have different precedence rules:**
 >
 > - **Read:** Every read is prompted unless the path is in `allowRead` or `allowWrite`.
->   `denyRead` is not a hard-block — it marks regions as denied by default, but
->   granting a prompt adds the path to `allowRead`, overriding `denyRead`.
+>   When both lists match, the more specific entry wins, and `allowRead` wins a tie.
+>   A broad `denyRead` such as `/Users` marks a region as denied by default: reads
+>   there are prompted, and granting one adds the path to `allowRead`. A `denyRead`
+>   entry inside an allowed area, such as `.env` or `*.pem` under `.`, is a hard
+>   block for bash and the read and edit tools, with no prompt.
 > - **Write:** `denyWrite` takes precedence over `allowWrite` and is never
 >   prompted. A path in `denyWrite` is always blocked, even if it matches
 >   `allowWrite`.
