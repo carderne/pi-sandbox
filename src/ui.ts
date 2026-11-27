@@ -114,7 +114,7 @@ export async function showPermissionPrompt(
   timeoutSeconds?: number,
 ): Promise<PermissionPromptResult> {
   const aborted: PermissionPromptResult = { action: "abort", value: originalValue };
-  if (!ctx.hasUI || (ctx.mode !== undefined && ctx.mode !== "tui")) return aborted;
+  if (!ctx.hasUI) return aborted;
 
   const queue = getPromptQueue(pi);
   const operationSignal = ctx.signal;
@@ -139,19 +139,54 @@ export async function showPermissionPrompt(
     const ready = await Promise.race([previous.then(() => true), cancelled]);
     signal.removeEventListener("abort", onAbort);
     if (!ready || signal.aborted) return aborted;
-    return await renderPermissionPrompt(
-      pi,
-      ctx,
-      title,
-      originalValue,
-      validateValue,
-      signal,
-      timeoutSeconds,
-    );
+    // Non-TUI hosts (e.g. rpc) can't mount the widget; fall back to a select dialog.
+    const result =
+      ctx.mode !== undefined && ctx.mode !== "tui"
+        ? await renderPermissionDialog(pi, ctx, title, originalValue, signal, timeoutSeconds)
+        : await renderPermissionPrompt(
+            pi,
+            ctx,
+            title,
+            originalValue,
+            validateValue,
+            signal,
+            timeoutSeconds,
+          );
+    // Late or invalid answers grant nothing.
+    if (signal.aborted) return aborted;
+    if (result.action !== "abort" && validateValue(result.value) !== null) return aborted;
+    return result;
   } finally {
     signal.removeEventListener("abort", onAbort);
     release();
   }
+}
+
+/** Select-dialog prompt for non-TUI hosts. Saves the requested target as-is. */
+async function renderPermissionDialog(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  title: string,
+  originalValue: string,
+  signal: AbortSignal,
+  timeoutSeconds?: number,
+): Promise<PermissionPromptResult> {
+  pi.events.emit("request-attention", { message: "Sandbox permission required" });
+  const options = permissionOptions(ctx.cwd);
+  const labels = options.map((option) =>
+    option.hint === undefined ? option.label : `${option.label}  ${option.hint}`,
+  );
+  const timeoutMs = permissionPromptTimeoutMs(timeoutSeconds);
+  const picked = await ctx.ui.select(title, labels, {
+    signal,
+    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
+  });
+  if (signal.aborted) return { action: "abort", value: originalValue };
+  const index = picked === undefined ? -1 : labels.indexOf(picked);
+  const option = index === -1 ? undefined : options[index];
+  if (option === undefined || option.action === "abort")
+    return { action: "abort", value: originalValue };
+  return { action: option.action, value: originalValue };
 }
 
 type PermissionWidget = Component & { focused: boolean; dispose(): void };
