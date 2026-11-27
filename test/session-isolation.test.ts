@@ -1,10 +1,14 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  type ExtensionToolContext,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 
 import extension from "../src/extension.ts";
@@ -28,6 +32,7 @@ function session(cwd: string, projectTrusted = true, hasUI = false) {
   const ctx = {
     cwd,
     hasUI,
+    sessionManager: SessionManager.inMemory(cwd),
     isProjectTrusted: () => projectTrusted,
     ui: {
       notify: (message: string, level: string) => {
@@ -36,7 +41,7 @@ function session(cwd: string, projectTrusted = true, hasUI = false) {
       setStatus: () => {},
       theme: { fg: (_color: string, text: string) => text },
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
   extension(api);
   return {
     async start() {

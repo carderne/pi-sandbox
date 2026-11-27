@@ -9,6 +9,7 @@ import {
   CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
+  type ExtensionToolContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
@@ -85,7 +86,7 @@ async function fixture(
         widget = factory(tui, theme);
       },
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
   extension(api);
   t.after(() => handlers.get("session_shutdown")!({}, ctx));
   await handlers.get("session_start")!({}, ctx);

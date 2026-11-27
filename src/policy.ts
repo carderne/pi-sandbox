@@ -63,11 +63,13 @@ export function extractDomainsFromCommand(command: string): string[] {
 
 export function domainMatchesPattern(domain: string, pattern: string): boolean {
   if (pattern === "*") return true;
-  if (pattern.startsWith("*.")) {
-    const base = pattern.slice(2);
-    return domain === base || domain.endsWith("." + base);
+  const host = domain.toLowerCase();
+  const rule = pattern.toLowerCase();
+  if (rule.startsWith("*.")) {
+    const base = rule.slice(2);
+    return host === base || host.endsWith("." + base);
   }
-  return domain === pattern;
+  return host === rule;
 }
 
 export function allowsAllDomains(allowedDomains: string[] | undefined): boolean {
