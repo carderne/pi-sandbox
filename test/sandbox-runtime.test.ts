@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -245,6 +245,60 @@ test("buildRuntimeConfig retains literal and canonical allowRead paths", () => {
   }
 });
 
+test("buildRuntimeConfig resolves glob patterns against the session cwd", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-glob-"));
+  const canonicalRoot = realpathSync(root);
+  try {
+    const runtime = buildRuntimeConfig(
+      {
+        ...DEFAULT_CONFIG,
+        filesystem: {
+          denyRead: [],
+          allowRead: ["."],
+          allowWrite: ["."],
+          denyWrite: ["*.pem", "secrets/*.json", "/etc/*.conf", "~/.ssh/*"],
+        },
+      },
+      undefined,
+      "darwin",
+      root,
+    );
+    assert.deepEqual(runtime.filesystem?.denyWrite, [
+      ...new Set([
+        // No "/": any depth below the cwd, in written and symlink-resolved form.
+        join(root, "**/*.pem"),
+        join(canonicalRoot, "**/*.pem"),
+        // With "/": anchored at the cwd.
+        join(root, "secrets/*.json"),
+        join(canonicalRoot, "secrets/*.json"),
+        "/etc/*.conf",
+        realpathSync("/etc") === "/etc" ? "/etc/*.conf" : join(realpathSync("/etc"), "*.conf"),
+        join(homedir(), ".ssh/*"),
+        join(canonicalizePath(join(homedir(), ".ssh")), "*"),
+      ]),
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("buildRuntimeConfig makes the default secret-file patterns absolute", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-sandbox-defaults-")));
+  try {
+    const runtime = buildRuntimeConfig(DEFAULT_CONFIG, undefined, "darwin", root);
+    const denyWrite = runtime.filesystem?.denyWrite ?? [];
+    for (const pattern of [".env.*", "*.pem", "*.key"]) {
+      assert.ok(denyWrite.includes(join(root, "**", pattern)), pattern);
+    }
+    assert.ok(
+      denyWrite.every((pattern) => pattern.startsWith("/")),
+      denyWrite.join(", "),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("buildRuntimeConfig preserves literal and canonical paths in all filesystem lists", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-sandbox-filesystem-"));
   const directory = join(root, "directory");
@@ -268,7 +322,15 @@ test("buildRuntimeConfig preserves literal and canonical paths in all filesystem
       "darwin",
       root,
     );
-    const expected = [...new Set([symlink, realpathSync(directory), directory, "*.key"])];
+    const expected = [
+      ...new Set([
+        symlink,
+        realpathSync(directory),
+        directory,
+        join(root, "**/*.key"),
+        join(realpathSync(root), "**/*.key"),
+      ]),
+    ];
 
     for (const list of ["denyRead", "allowRead", "allowWrite", "denyWrite"] as const) {
       assert.deepEqual(runtime.filesystem?.[list], expected, list);

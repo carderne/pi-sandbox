@@ -108,6 +108,38 @@ test("path patterns support directory prefixes and globs", () => {
   assert.equal(matchesPattern(join(root, "file.txt"), [join(root, "*.pem")]), false);
 });
 
+test("glob patterns match like the sandbox runtime", () => {
+  const root = canonicalizePath(mkdtempSync(join(tmpdir(), "pi-sandbox-glob-")));
+  const matches = (path: string, pattern: string) =>
+    matchesPattern(join(root, path), [pattern], root);
+
+  // No "/": any depth below the cwd.
+  assert.equal(matches("top.pem", "*.pem"), true);
+  assert.equal(matches("deep/nested/prod.pem", "*.pem"), true);
+  assert.equal(matches(".env.local", ".env.*"), true);
+  assert.equal(matches("config/.env.production", ".env.*"), true);
+  assert.equal(matches("top.pem.txt", "*.pem"), false);
+
+  // With "/": anchored at the cwd, and `*` does not cross directories.
+  assert.equal(matches("secrets/a.json", "secrets/*.json"), true);
+  assert.equal(matches("secrets/nested/a.json", "secrets/*.json"), false);
+  assert.equal(matches("other/secrets/a.json", "secrets/*.json"), false);
+  assert.equal(matches("secrets/nested/a.json", "secrets/**/*.json"), true);
+  assert.equal(matches("secrets/nested/a.json", "secrets/**"), true);
+});
+
+test("glob patterns match when the cwd is reached through a symlink", () => {
+  const real = canonicalizePath(mkdtempSync(join(tmpdir(), "pi-sandbox-glob-real-")));
+  const link = join(canonicalizePath(mkdtempSync(join(tmpdir(), "pi-sandbox-glob-link-"))), "p");
+  symlinkSync(real, link);
+  mkdirSync(join(real, "deep"));
+
+  for (const path of [join(link, "top.pem"), join(link, "deep", "prod.pem")]) {
+    assert.equal(matchesPattern(path, ["*.pem"], link), true, path);
+    assert.equal(matchesPattern(path, [join(link, "**/*.pem")], link), true, path);
+  }
+});
+
 test("relative paths resolve against baseCwd, not process.cwd()", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-sandbox-basecwd-"));
   const project = canonicalizePath(root);
