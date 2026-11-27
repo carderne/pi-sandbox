@@ -19,25 +19,23 @@ export async function resolveWritePermission({
   denyWrite,
   baseCwd,
   prompt,
-  saveWritePermission,
 }: {
   path: string;
   allowWrite: string[];
   denyWrite: string[];
   baseCwd?: string;
+  /** Shows the prompt and saves any grant; "allowed" means an earlier grant covers the path. */
   prompt: (path: string) => Promise<{
-    action: "abort" | "session" | "project" | "global";
+    action: "abort" | "allowed" | "session" | "project" | "global";
     value: string;
   }>;
-  saveWritePermission: (choice: "session" | "project" | "global", value: string) => Promise<void>;
 }) {
   const policy = decideWritePolicy(path, allowWrite, denyWrite, baseCwd);
   if (policy !== "prompt") return { action: policy };
 
   const choice = await prompt(path);
   if (choice.action === "abort") return { action: "abort", value: choice.value };
-
-  await saveWritePermission(choice.action, choice.value);
+  if (choice.action === "allowed") return { action: "allow" };
   return { action: "granted", value: choice.value };
 }
 

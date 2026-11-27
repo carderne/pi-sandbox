@@ -121,6 +121,27 @@ test(
   },
 );
 
+test("a queued request sees grants saved by the prompt before it", { timeout: 2000 }, async (t) => {
+  const f = fixture(t);
+  let granted = false;
+  const hooks = {
+    isAllowed: () => granted,
+    apply: async () => {
+      await setImmediate();
+      granted = true;
+    },
+  };
+  const ask = (value: string) =>
+    prompts.showPermissionPrompt(f.pi, f.ctx as never, "Blocked", value, () => null, 0, hooks);
+  const a = ask("first");
+  const b = ask("second");
+  await setImmediate();
+  f.send("s");
+  assert.equal((await a).action, "session");
+  assert.deepEqual(await b, { action: "allowed", value: "second" });
+  assert.equal(f.mounts.length, 1);
+});
+
 test(
   "aborting a queued request does not mount it or release the active request",
   { timeout: 2000 },
