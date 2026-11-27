@@ -1,13 +1,12 @@
 import {
-  CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
+  type ExtensionUIDialogOptions,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   Key,
-  isKeyRelease,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -139,7 +138,7 @@ export async function showPermissionPrompt(
     const ready = await Promise.race([previous.then(() => true), cancelled]);
     signal.removeEventListener("abort", onAbort);
     if (!ready || signal.aborted) return aborted;
-    // Non-TUI hosts (e.g. rpc) can't mount the widget; fall back to a select dialog.
+    // Non-TUI hosts (e.g. rpc) can't render custom components; fall back to a select dialog.
     const result =
       ctx.mode !== undefined && ctx.mode !== "tui"
         ? await renderPermissionDialog(pi, ctx, title, originalValue, signal, timeoutSeconds)
@@ -177,10 +176,13 @@ async function renderPermissionDialog(
     option.hint === undefined ? option.label : `${option.label}  ${option.hint}`,
   );
   const timeoutMs = permissionPromptTimeoutMs(timeoutSeconds);
-  const picked = await ctx.ui.select(title, labels, {
+  // blockedKind (Pi >= 1.6.1) reports the dialog as a permission request; older Pi ignores it.
+  const dialogOptions: ExtensionUIDialogOptions & { blockedKind?: "permission" } = {
     signal,
+    blockedKind: "permission",
     ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
-  });
+  };
+  const picked = await ctx.ui.select(title, labels, dialogOptions);
   if (signal.aborted) return { action: "abort", value: originalValue };
   const index = picked === undefined ? -1 : labels.indexOf(picked);
   const option = index === -1 ? undefined : options[index];
@@ -189,78 +191,25 @@ async function renderPermissionDialog(
   return { action: option.action, value: originalValue };
 }
 
-type PermissionWidget = Component & { focused: boolean; dispose(): void };
+type PermissionComponent = Component & { focused?: boolean; dispose?(): void };
 
-async function showPermissionWidget(
+/**
+ * Inline custom UI lets Pi report the prompt: blocked program status (OSC 7501)
+ * for terminals such as Rex, and ui_prompt_start/end for status extensions.
+ */
+async function showPermissionComponent(
   ctx: ExtensionContext,
+  title: string,
   create: (
     tui: TUI,
     theme: Theme,
     done: (result: PermissionPromptResult) => void,
-  ) => PermissionWidget,
-): Promise<PermissionPromptResult> {
-  let unsubscribe = (): void => {};
-  let restoreCursor = (): void => {};
-  let mounted = false;
-  let disposed = false;
-  try {
-    return await new Promise<PermissionPromptResult>((done) => {
-      ctx.ui.setWidget(
-        "sandbox-permission",
-        (tui, theme) => {
-          const getFocus = (): unknown => {
-            if ("getFocusedComponent" in tui && typeof tui.getFocusedComponent === "function") {
-              return tui.getFocusedComponent();
-            }
-            // Pi 0.80 stores focus on the instance without exposing a getter.
-            if ("focusedComponent" in tui) return Reflect.get(tui, "focusedComponent");
-            throw new Error("Sandbox inline permissions require TUI focus inspection.");
-          };
-          getFocus();
-          const component = create(tui, theme, done);
-          const syncFocus = (): boolean => {
-            const editor = getFocus();
-            const active = editor instanceof CustomEditor;
-            component.focused = active;
-            if (active) editor.focused = false;
-            return active;
-          };
-          restoreCursor = (): void => {
-            const editor = getFocus();
-            if (editor instanceof CustomEditor) editor.focused = true;
-            tui.requestRender();
-          };
-          unsubscribe = ctx.ui.onTerminalInput((data) => {
-            if (!syncFocus()) return;
-            if (isKeyRelease(data)) return { consume: true };
-            component.handleInput?.(data);
-            return { consume: true };
-          });
-          return {
-            render(width: number): string[] {
-              syncFocus();
-              return component.render(width);
-            },
-            invalidate(): void {
-              component.invalidate();
-            },
-            dispose(): void {
-              disposed = true;
-              unsubscribe();
-              restoreCursor();
-              component.dispose();
-            },
-          };
-        },
-        { placement: "aboveEditor" },
-      );
-      mounted = true;
-    });
-  } finally {
-    unsubscribe();
-    restoreCursor();
-    if (mounted && !disposed) ctx.ui.setWidget("sandbox-permission", undefined);
-  }
+  ) => PermissionComponent,
+): Promise<PermissionPromptResult | undefined> {
+  return ctx.ui.custom<PermissionPromptResult>(
+    (tui, theme, _keybindings, done) => create(tui, theme, done),
+    { blocked: { kind: "permission", message: title } },
+  );
 }
 
 async function renderPermissionPrompt(
@@ -278,10 +227,10 @@ async function renderPermissionPrompt(
   const options = permissionOptions(ctx.cwd);
   let cleanup = (): void => {};
   try {
-    const result = await showPermissionWidget(ctx, (tui, theme, done) => {
+    const result = await showPermissionComponent(ctx, title, (tui, theme, done) => {
       if (signal.aborted) {
         done({ action: "abort", value: originalValue });
-        return { focused: false, render: () => [], invalidate: () => {}, dispose: () => {} };
+        return { render: () => [], invalidate: () => {} };
       }
       const input = new Input();
       let selectedIndex = 0;
