@@ -145,6 +145,13 @@ checked against the same filesystem policy. The OS-level sandbox cannot cover
 these tools because they run directly in the Node.js process rather than in a
 subprocess.
 
+**Other tools are not covered.** Pi's optional `grep`, `find`, and `ls` tools,
+tools registered by other extensions, and MCP tools also run in the Node.js
+process, but they are not intercepted: the filesystem policy and
+`allowedDomains` do not apply to them, and neither do processes they start
+themselves rather than through `bash`. Only enable tools you would trust with
+pi's own access.
+
 When a block is triggered, a permission prompt with four options temporarily
 replaces the input editor, like other Pi dialogs; the input draft is restored
 afterwards. Concurrent requests are queued per extension instance. Operation
