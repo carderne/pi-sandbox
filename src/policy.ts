@@ -106,6 +106,39 @@ export function canonicalizePath(filePath: string, baseCwd: string = process.cwd
   }
 }
 
+// Resolve a glob pattern to absolute form without expanding it.
+//
+// A glob without a "/" matches at any depth below baseCwd, like .gitignore
+// (`*.pem` becomes `<cwd>/**/*.pem`); other globs are anchored at baseCwd. The
+// static prefix before the first glob segment is returned both as written and
+// with symlinks resolved, since paths are compared in canonical form and
+// `/tmp` and `/var` are symlinks into `/private` on macOS.
+export function resolveGlobPattern(pattern: string, baseCwd: string = process.cwd()): string[] {
+  const absolute = expandPath(pattern.includes("/") ? pattern : `**/${pattern}`, baseCwd);
+  const segments = absolute.split("/");
+  const firstGlob = segments.findIndex((segment) => segment.includes("*"));
+  const prefix = segments.slice(0, firstGlob).join("/") || "/";
+  const canonicalPrefix = canonicalizePath(prefix, baseCwd);
+  const canonical = [canonicalPrefix.replace(/\/$/, ""), ...segments.slice(firstGlob)].join("/");
+  return canonical === absolute ? [absolute] : [absolute, canonical];
+}
+
+const GLOB_REGEX: Record<string, string> = {
+  "**/": "(.*/)?",
+  "**": ".*",
+  "*": "[^/]*",
+  "?": "[^/]",
+};
+
+/** Mirrors the sandbox runtime's globToRegex: `*` stays within a segment, `**` crosses them. */
+function globToRegExp(glob: string): RegExp {
+  const source = glob
+    .replace(/[.^$+{}()|\\]/g, "\\$&")
+    .replace(/\[([^\]]*?)$/g, "\\[$1")
+    .replace(/\*\*\/|\*\*|\*|\?/g, (token) => GLOB_REGEX[token]!);
+  return new RegExp(`^${source}$`);
+}
+
 export function matchesPattern(
   filePath: string,
   patterns: string[],
@@ -113,13 +146,12 @@ export function matchesPattern(
 ): boolean {
   const absolutePath = canonicalizePath(filePath, baseCwd);
   return patterns.some((pattern) => {
-    const absolutePattern = pattern.includes("*")
-      ? expandPath(pattern, baseCwd)
-      : canonicalizePath(pattern, baseCwd);
     if (pattern.includes("*")) {
-      const escaped = absolutePattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-      return new RegExp(`^${escaped}$`).test(absolutePath);
+      return resolveGlobPattern(pattern, baseCwd).some((glob) =>
+        globToRegExp(glob).test(absolutePath),
+      );
     }
+    const absolutePattern = canonicalizePath(pattern, baseCwd);
     const separator = absolutePattern.endsWith("/") ? "" : "/";
     return absolutePath === absolutePattern || absolutePath.startsWith(absolutePattern + separator);
   });

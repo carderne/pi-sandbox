@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 
 import { type SandboxConfig } from "./config.ts";
-import { canonicalizePath } from "./policy.ts";
+import { canonicalizePath, resolveGlobPattern } from "./policy.ts";
 
 export interface SessionAllowances {
   domains: string[];
@@ -50,7 +50,7 @@ function resolveUnixSockets(config: SandboxConfig): string[] | undefined {
 const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
   unique(
     paths.flatMap((path) => {
-      if (path.includes("*")) return [path];
+      if (path.includes("*")) return resolveGlobPattern(path, baseCwd);
       const absolutePath = resolve(baseCwd ?? process.cwd(), path.replace(/^~(?=$|\/)/, homedir()));
       return [absolutePath, canonicalizePath(path, baseCwd)];
     }),

@@ -21,8 +21,8 @@ importers:
   .:
     dependencies:
       '@carderne/sandbox-runtime':
-        specifier: ^0.0.80
-        version: 0.0.80
+        specifier: ^0.0.81
+        version: 0.0.81
       typebox:
         specifier: '*'
         version: 1.1.38
@@ -144,8 +144,8 @@ packages:
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
-  '@carderne/sandbox-runtime@0.0.80':
-    resolution: {integrity: sha512-y1HBCG1tet3htzwvQZSGfYJ6DChEkyPS47NvMmyZsXaUp2lURcVelL08Uf3YV1k5gtq9b0y2wZnMTvquJPfbjg==}
+  '@carderne/sandbox-runtime@0.0.81':
+    resolution: {integrity: sha512-gidW0GnRD57CdZkggxkTYIYs3iPrzqRSR0116LEJq54OyHGIR7RxXO+wHWg9OPrBlivEDVRTn6URQKHX82ZfjQ==}
     engines: {node: '>=20.11.0'}
     hasBin: true
 
@@ -1214,7 +1214,7 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@carderne/sandbox-runtime@0.0.80':
+  '@carderne/sandbox-runtime@0.0.81':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       commander: 12.1.0
