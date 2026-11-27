@@ -6,7 +6,6 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
-  CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
   type ExtensionToolContext,
@@ -49,10 +48,8 @@ async function fixture(
   const tools = new Map<string, Parameters<ExtensionAPI["registerTool"]>[0]>();
   const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
   let prompts = 0;
-  let input: ((data: string) => { consume?: boolean } | undefined) | undefined;
-  let widget: (Component & { dispose?(): void }) | undefined;
-  const editor = Object.create(CustomEditor.prototype) as CustomEditor;
-  const tui = { requestRender() {}, getFocusedComponent: () => editor } as unknown as TUI;
+  let prompt: Component | undefined;
+  const tui = { requestRender() {} } as unknown as TUI;
   const theme = { fg: (_color: string, text: string) => text } as unknown as Theme;
   const api = {
     registerTool: (tool: Parameters<ExtensionAPI["registerTool"]>[0]) => tools.set(tool.name, tool),
@@ -72,18 +69,23 @@ async function fixture(
       notify() {},
       setStatus() {},
       theme,
-      onTerminalInput(handler: typeof input) {
-        input = handler;
-        return () => {
-          input = undefined;
-        };
-      },
-      setWidget(_key: string, factory?: (tui: TUI, theme: Theme) => typeof widget) {
-        widget?.dispose?.();
-        widget = undefined;
-        if (!factory) return;
+      custom(
+        factory: (
+          tui: TUI,
+          theme: Theme,
+          keybindings: unknown,
+          done: (result: unknown) => void,
+        ) => Component & { dispose?(): void },
+      ) {
         prompts++;
-        widget = factory(tui, theme);
+        return new Promise((resolve) => {
+          const component = factory(tui, theme, {}, (result) => {
+            prompt = undefined;
+            resolve(result);
+            component.dispose?.();
+          });
+          prompt = component;
+        });
       },
     },
   } as unknown as ExtensionToolContext;
@@ -97,8 +99,8 @@ async function fixture(
     handlers,
     prompts: () => prompts,
     send: (data: string) => {
-      assert.ok(input, "Permission widget must be listening for input");
-      input(data);
+      assert.ok(prompt, "Permission prompt must be showing");
+      prompt.handleInput?.(data);
     },
     execute: (name: string, params: Record<string, unknown> = {}) =>
       tools.get(name)!.execute("test", params, undefined, undefined, ctx),

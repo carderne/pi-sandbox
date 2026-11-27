@@ -84,12 +84,13 @@ test(
   async () => {
     type TestComponent = { render(width: number): string[]; dispose?(): void };
     type PromptFactory = (
-      tui: { requestRender(): void; getFocusedComponent(): null },
+      tui: { requestRender(): void },
       theme: { fg(color: string, text: string): string },
+      keybindings: unknown,
+      done: (result: unknown) => void,
     ) => TestComponent;
 
     let renderedLines: string[] = [];
-    let component: TestComponent | undefined;
     const pi = {
       events: { emit: () => undefined },
     } as unknown as ExtensionAPI;
@@ -97,19 +98,20 @@ test(
       cwd: "/workspace",
       hasUI: true,
       ui: {
-        onTerminalInput: () => () => {},
-        setWidget: (_key: string, factory?: PromptFactory): void => {
-          if (!factory) {
-            component?.dispose?.();
-            component = undefined;
-            return;
-          }
-          component = factory(
-            { requestRender: () => undefined, getFocusedComponent: () => null },
-            { fg: (_color, text) => text },
-          );
-          renderedLines = component.render(80);
-        },
+        custom: (factory: PromptFactory) =>
+          new Promise((resolve) => {
+            let component: TestComponent | undefined;
+            component = factory(
+              { requestRender: () => undefined },
+              { fg: (_color, text) => text },
+              {},
+              (result) => {
+                resolve(result);
+                component?.dispose?.();
+              },
+            );
+            renderedLines = component.render(80);
+          }),
       },
     } as unknown as ExtensionContext;
 
@@ -124,6 +126,7 @@ type DialogSelect = {
   options: string[];
   timeout: number | undefined;
   signal: AbortSignal | undefined;
+  blockedKind: string | undefined;
   resolve: (value: string | undefined) => void;
 };
 
@@ -138,12 +141,23 @@ function dialogRig(signal?: AbortSignal) {
   const selects: DialogSelect[] = [];
   const opened = deferred();
   const ui = {
-    setWidget: (): never => {
-      throw new Error("the TUI widget requires a terminal and must not be used");
+    custom: (): never => {
+      throw new Error("custom TUI components require a terminal and must not be used");
     },
-    select: (title: string, options: string[], opts?: { timeout?: number; signal?: AbortSignal }) =>
+    select: (
+      title: string,
+      options: string[],
+      opts?: { timeout?: number; signal?: AbortSignal; blockedKind?: string },
+    ) =>
       new Promise<string | undefined>((resolve) => {
-        selects.push({ title, options, timeout: opts?.timeout, signal: opts?.signal, resolve });
+        selects.push({
+          title,
+          options,
+          timeout: opts?.timeout,
+          signal: opts?.signal,
+          blockedKind: opts?.blockedKind,
+          resolve,
+        });
         opened.resolve();
         opts?.signal?.addEventListener("abort", () => resolve(undefined), { once: true });
       }),
@@ -177,6 +191,7 @@ test(
       const prompt = showPermissionPrompt(pi, rig.ctx, "Blocked", "example.test", () => null, 30);
       await rig.opened;
       assert.equal(rig.selects[0]?.timeout, 30_000);
+      assert.equal(rig.selects[0]?.blockedKind, "permission");
       assert.equal(rig.selects[0]?.options.length, 4);
       const label =
         answer === undefined

@@ -144,17 +144,16 @@ checked against the same filesystem policy. The OS-level sandbox cannot cover
 these tools because they run directly in the Node.js process rather than in a
 subprocess.
 
-When a block is triggered, a permission widget appears above the input editor with
-four options. Concurrent requests are queued per extension instance. The widget
-accepts input while the main Pi editor (including `CustomEditor` subclasses) has
-focus; other dialogs keep their own keyboard input, and permission selection
-resumes when they close. Operation cancellation, sandbox disable, and session
-shutdown abort pending requests without granting access. The input draft is left
-untouched.
+When a block is triggered, a permission prompt with four options temporarily
+replaces the input editor, like other Pi dialogs; the input draft is restored
+afterwards. Concurrent requests are queued per extension instance. Operation
+cancellation, sandbox disable, and session shutdown abort pending requests
+without granting access.
 
-Focus inspection uses Pi's `getFocusedComponent()` when available and the
-`focusedComponent` instance field on Pi 0.80. If neither is available, the request
-fails rather than intercepting input without knowing which dialog owns it.
+While a prompt waits, Pi reports it as a blocked permission request: terminals
+that support [program status (OSC 7501)](https://www.superlogical.com/rex/docs/build/program-status),
+such as Rex, show the session as blocked, and status extensions receive Pi's
+`ui_prompt_start` / `ui_prompt_end` events.
 
 Permission prompts automatically select **Abort (keep blocked)** after 10 minutes
 by default. Set
