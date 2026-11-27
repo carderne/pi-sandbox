@@ -47,6 +47,9 @@ test("matches exact, wildcard, and all-domain policies", () => {
   assert.equal(domainIsAllowed("github.com", ["github.com"]), true);
   assert.equal(domainIsAllowed("api.github.com", ["*.github.com"]), true);
   assert.equal(domainIsAllowed("notgithub.com", ["*.github.com"]), false);
+  assert.equal(domainIsAllowed("somea.example.org", ["someA.example.org"]), true);
+  assert.equal(domainIsAllowed("API.GitHub.com", ["*.github.com"]), true);
+  assert.equal(domainIsAllowed("github.com", ["*.GitHub.com"]), true);
   assert.equal(allowsAllDomains(["*"]), true);
 });
 
