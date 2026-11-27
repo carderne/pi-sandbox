@@ -26,8 +26,16 @@ import { type SessionAllowances } from "./sandbox-runtime.ts";
 export type PermissionChoice = "abort" | "session" | "project" | "global";
 
 export interface PermissionPromptResult {
-  action: PermissionChoice;
+  /** "allowed": an earlier answer already covers the request, so no prompt was shown. */
+  action: PermissionChoice | "allowed";
   value: string;
+}
+
+export interface PermissionRequestHooks {
+  /** Re-checked when the request reaches the front of the queue; true skips the prompt. */
+  isAllowed?: () => boolean;
+  /** Saves a grant before the queue moves on, so later requests see it. */
+  apply?: (choice: Exclude<PermissionChoice, "abort">, value: string) => Promise<void>;
 }
 
 interface PromptOption {
@@ -111,6 +119,7 @@ export async function showPermissionPrompt(
   originalValue: string,
   validateValue: (value: string) => string | null,
   timeoutSeconds?: number,
+  hooks: PermissionRequestHooks = {},
 ): Promise<PermissionPromptResult> {
   const aborted: PermissionPromptResult = { action: "abort", value: originalValue };
   if (!ctx.hasUI) return aborted;
@@ -138,6 +147,7 @@ export async function showPermissionPrompt(
     const ready = await Promise.race([previous.then(() => true), cancelled]);
     signal.removeEventListener("abort", onAbort);
     if (!ready || signal.aborted) return aborted;
+    if (hooks.isAllowed?.()) return { action: "allowed", value: originalValue };
     // Non-TUI hosts (e.g. rpc) can't render custom components; fall back to a select dialog.
     const result =
       ctx.mode !== undefined && ctx.mode !== "tui"
@@ -153,7 +163,9 @@ export async function showPermissionPrompt(
           );
     // Late or invalid answers grant nothing.
     if (signal.aborted) return aborted;
-    if (result.action !== "abort" && validateValue(result.value) !== null) return aborted;
+    if (result.action === "abort" || result.action === "allowed") return result;
+    if (validateValue(result.value) !== null) return aborted;
+    await hooks.apply?.(result.action, result.value);
     return result;
   } finally {
     signal.removeEventListener("abort", onAbort);
@@ -465,6 +477,7 @@ export function promptDomainBlock(
   ctx: ExtensionContext,
   domain: string,
   timeoutSeconds?: number,
+  hooks?: PermissionRequestHooks,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
     pi,
@@ -473,6 +486,7 @@ export function promptDomainBlock(
     domain,
     (value) => validRule(value, domainIsAllowed(domain, [value]), `domain "${domain}"`),
     timeoutSeconds,
+    hooks,
   );
 }
 
@@ -481,6 +495,7 @@ export function promptReadBlock(
   ctx: ExtensionContext,
   path: string,
   timeoutSeconds?: number,
+  hooks?: PermissionRequestHooks,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
     pi,
@@ -489,6 +504,7 @@ export function promptReadBlock(
     path,
     (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
     timeoutSeconds,
+    hooks,
   );
 }
 
@@ -497,6 +513,7 @@ export function promptWriteBlock(
   ctx: ExtensionContext,
   path: string,
   timeoutSeconds?: number,
+  hooks?: PermissionRequestHooks,
 ): Promise<PermissionPromptResult> {
   return showPermissionPrompt(
     pi,
@@ -505,6 +522,7 @@ export function promptWriteBlock(
     path,
     (value) => validRule(value, matchesPattern(path, [value], ctx.cwd), `path "${path}"`),
     timeoutSeconds,
+    hooks,
   );
 }
 

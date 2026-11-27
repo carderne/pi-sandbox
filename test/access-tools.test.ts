@@ -154,6 +154,26 @@ test("access tools report effective grants and avoid redundant or forbidden prom
   assert.equal(f.prompts(), 1);
 });
 
+test("a broader approval covers requests already queued behind it", async (t) => {
+  const f = await fixture(t, true);
+  const request = (target: string) =>
+    f.execute("sandbox_request_access", { kind: "read", target, reason: "Inspect project" });
+  const first = request(join(f.root, "src", "components"));
+  const second = request(join(f.root, "src", "utils"));
+  await setImmediate();
+  f.send("\t");
+  f.send("\x15");
+  f.send(join(f.root, "src"));
+  f.send("\r");
+  assert.equal(((await first).details as { rule: string }).rule, join(f.root, "src"));
+  assert.deepEqual((await second).details, {
+    kind: "read",
+    target: join(f.root, "src", "utils"),
+    alreadyAllowed: true,
+  });
+  assert.equal(f.prompts(), 1);
+});
+
 test("network.disabled skips domain preflight and treats domain access requests as already allowed", async (t) => {
   const f = await fixture(t, true, {
     enabled: true,

@@ -37,7 +37,8 @@ import {
   resetPermissionPrompts,
   formatSandboxConfiguration,
   formatSandboxStatus,
-  type PermissionPromptResult,
+  type PermissionChoice,
+  type PermissionRequestHooks,
   promptDomainBlock,
   promptReadBlock,
   showPermissionPrompt,
@@ -80,7 +81,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function applyChoice(
-    choice: Exclude<PermissionPromptResult["action"], "abort">,
+    choice: Exclude<PermissionChoice, "abort">,
     kind: "domain" | "read" | "write",
     value: string,
     cwd: string,
@@ -106,6 +107,23 @@ export default function (pi: ExtensionAPI) {
     }
     await refreshSandbox(cwd);
   }
+
+  /** Re-check and save inside the prompt queue so one answer can cover later requests. */
+  const promptHooks = (
+    kind: "domain" | "read" | "write",
+    target: string,
+    cwd: string,
+  ): PermissionRequestHooks => ({
+    isAllowed: () =>
+      kind === "domain"
+        ? domainIsAllowed(target, effectiveDomains(cwd))
+        : matchesPattern(
+            target,
+            kind === "read" ? effectiveReadPaths(cwd) : effectiveWritePaths(cwd),
+            cwd,
+          ),
+    apply: (choice, value) => applyChoice(choice, kind, value, cwd),
+  });
 
   function updateStatus(
     ctx: Parameters<typeof warnIfAllDomainsAllowed>[0],
@@ -189,13 +207,16 @@ export default function (pi: ExtensionAPI) {
     ctx,
     reason,
     signal,
+    skipIfAllowed = false,
   }: {
     kind: "domain" | "read" | "write";
     target: string;
     ctx: Parameters<typeof showPermissionPrompt>[1];
     reason?: string;
     signal?: AbortSignal;
+    skipIfAllowed?: boolean;
   }) {
+    const hooks = promptHooks(kind, target, ctx.cwd);
     const config = loadConfig(ctx.cwd, projectTrusted);
     const configKey =
       kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
@@ -214,11 +235,9 @@ export default function (pi: ExtensionAPI) {
         return matches ? null : `Rule must match "${target}".`;
       },
       config.permissionPromptTimeoutSeconds,
+      skipIfAllowed ? hooks : { apply: hooks.apply },
     );
     if (signal?.aborted) throw new Error("Access request cancelled.");
-    if (choice.action !== "abort") {
-      await applyChoice(choice.action, kind, choice.value, ctx.cwd);
-    }
     return choice;
   }
 
@@ -296,16 +315,26 @@ export default function (pi: ExtensionAPI) {
                 kind === "read" ? effective.readPaths : effective.writePaths,
                 ctx.cwd,
               );
-        if (alreadyAllowed) {
-          return {
-            content: [
-              { type: "text", text: `Access already allowed: ${kind} ${JSON.stringify(target)}.` },
-            ],
-            details: { kind, target, alreadyAllowed: true },
-          };
-        }
+        const alreadyAllowedResult = {
+          content: [
+            {
+              type: "text" as const,
+              text: `Access already allowed: ${kind} ${JSON.stringify(target)}.`,
+            },
+          ],
+          details: { kind, target, alreadyAllowed: true },
+        };
+        if (alreadyAllowed) return alreadyAllowedResult;
         if (!ctx.hasUI) throw new Error("Sandbox access requests require an approval UI.");
-        const choice = await requestAccess({ kind, target, ctx, reason, signal });
+        const choice = await requestAccess({
+          kind,
+          target,
+          ctx,
+          reason,
+          signal,
+          skipIfAllowed: true,
+        });
+        if (choice.action === "allowed") return alreadyAllowedResult;
         if (choice.action === "abort")
           throw new Error(`Sandbox access request denied for "${target}".`);
         return {
@@ -379,6 +408,7 @@ export default function (pi: ExtensionAPI) {
             ctx,
             domain,
             config.permissionPromptTimeoutSeconds,
+            promptHooks("domain", domain, ctx.cwd),
           );
           if (choice.action === "abort") {
             return {
@@ -390,7 +420,6 @@ export default function (pi: ExtensionAPI) {
               },
             };
           }
-          await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
         }
       }
     }
@@ -417,6 +446,7 @@ export default function (pi: ExtensionAPI) {
             ctx,
             domain,
             config.permissionPromptTimeoutSeconds,
+            promptHooks("domain", domain, ctx.cwd),
           );
           if (choice.action === "abort") {
             return {
@@ -424,7 +454,6 @@ export default function (pi: ExtensionAPI) {
               reason: `Network access to "${domain}" is blocked (not in allowedDomains).`,
             };
           }
-          await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
         }
       }
     }
@@ -432,11 +461,16 @@ export default function (pi: ExtensionAPI) {
     if (isToolCallEventType("read", event)) {
       const path = canonicalizePath(event.input.path, ctx.cwd);
       if (!matchesPattern(path, effectiveReadPaths(ctx.cwd), ctx.cwd)) {
-        const choice = await promptReadBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
+        const choice = await promptReadBlock(
+          pi,
+          ctx,
+          path,
+          config.permissionPromptTimeoutSeconds,
+          promptHooks("read", path, ctx.cwd),
+        );
         if (choice.action === "abort") {
           return { block: true, reason: `Sandbox: read access denied for "${path}"` };
         }
-        await applyChoice(choice.action, "read", choice.value, ctx.cwd);
         return;
       }
     }
@@ -448,8 +482,14 @@ export default function (pi: ExtensionAPI) {
         allowWrite: effectiveWritePaths(ctx.cwd),
         denyWrite: config.filesystem?.denyWrite ?? [],
         baseCwd: ctx.cwd,
-        prompt: (path) => promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
-        saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
+        prompt: (path) =>
+          promptWriteBlock(
+            pi,
+            ctx,
+            path,
+            config.permissionPromptTimeoutSeconds,
+            promptHooks("write", path, ctx.cwd),
+          ),
       });
       if (writePermission.action === "deny") {
         return {

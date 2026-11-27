@@ -61,13 +61,10 @@ test("decides write policy from deny and allow lists", () => {
 });
 
 test("resolves write permission without prompting for denied or allowed paths", async () => {
-  const calls: string[] = [];
+  let prompts = 0;
   const prompt = async () => {
-    calls.push("prompt");
+    prompts++;
     return { action: "session" as const, value: "/tmp" };
-  };
-  const apply = async () => {
-    calls.push("apply");
   };
 
   assert.deepEqual(
@@ -76,7 +73,6 @@ test("resolves write permission without prompting for denied or allowed paths", 
       allowWrite: ["/tmp"],
       denyWrite: ["/tmp/file"],
       prompt,
-      saveWritePermission: apply,
     }),
     { action: "deny" },
   );
@@ -86,42 +82,23 @@ test("resolves write permission without prompting for denied or allowed paths", 
       allowWrite: ["/tmp"],
       denyWrite: [],
       prompt,
-      saveWritePermission: apply,
     }),
     { action: "allow" },
   );
-  assert.deepEqual(calls, []);
+  assert.equal(prompts, 0);
 });
 
 test("resolves write permission prompt choices", async () => {
-  const applied: string[] = [];
-  assert.deepEqual(
-    await resolveWritePermission({
+  const resolve = (action: "abort" | "allowed" | "session") =>
+    resolveWritePermission({
       path: "/tmp/file",
       allowWrite: [],
       denyWrite: [],
-      prompt: async () => ({ action: "abort", value: "/tmp/file" }),
-      saveWritePermission: async (choice, value) => {
-        applied.push(`${choice}:${value}`);
-      },
-    }),
-    { action: "abort", value: "/tmp/file" },
-  );
-  assert.deepEqual(applied.length, 0);
-
-  assert.deepEqual(
-    await resolveWritePermission({
-      path: "/tmp/file",
-      allowWrite: [],
-      denyWrite: [],
-      prompt: async () => ({ action: "session", value: "/tmp" }),
-      saveWritePermission: async (choice, value) => {
-        applied.push(`${choice}:${value}`);
-      },
-    }),
-    { action: "granted", value: "/tmp" },
-  );
-  assert.deepEqual(applied, ["session:/tmp"]);
+      prompt: async () => ({ action, value: "/tmp" }),
+    });
+  assert.deepEqual(await resolve("abort"), { action: "abort", value: "/tmp" });
+  assert.deepEqual(await resolve("allowed"), { action: "allow" });
+  assert.deepEqual(await resolve("session"), { action: "granted", value: "/tmp" });
 });
 
 test("path patterns support directory prefixes and globs", () => {
