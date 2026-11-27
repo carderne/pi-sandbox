@@ -560,7 +560,7 @@ export function promptWriteBlock(
 }
 
 export function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxConfig): void {
-  if (!allowsAllDomains(config.network?.allowedDomains)) return;
+  if (config.network?.disabled || !allowsAllDomains(config.network?.allowedDomains)) return;
   ctx.ui.notify(
     '⚠️ Network sandbox allows all domains because network.allowedDomains contains "*". ' +
       'Only use this intentionally; remove "*" to restore per-domain prompts.',
@@ -597,9 +597,11 @@ export function warnIfLinuxUnenforcedGlobs(
 }
 
 export function formatSandboxStatus(config: SandboxConfig): string {
-  const networkLabel = allowsAllDomains(config.network?.allowedDomains)
-    ? "all domains"
-    : `${config.network?.allowedDomains?.length ?? 0} domains`;
+  const networkLabel = config.network?.disabled
+    ? "network disabled"
+    : allowsAllDomains(config.network?.allowedDomains)
+      ? "all domains"
+      : `${config.network?.allowedDomains?.length ?? 0} domains`;
   return `🔒 Sandbox: ${networkLabel}, ${config.filesystem?.allowWrite?.length ?? 0} write paths`;
 }
 
@@ -614,12 +616,18 @@ export function formatSandboxConfiguration(
     `  Global config:  ${paths.globalPath}`,
     "",
     "Network (bash + !cmd):",
-    `  Allowed domains: ${config.network?.allowedDomains?.join(", ") || "(none)"}`,
-    ...(allowsAllDomains(config.network?.allowedDomains)
-      ? ['  ⚠️ "*" allows all domains and disables per-domain prompts.']
-      : []),
-    `  Denied domains:  ${config.network?.deniedDomains?.join(", ") || "(none)"}`,
-    ...(allowances.domains.length ? [`  Session allowed: ${allowances.domains.join(", ")}`] : []),
+    ...(config.network?.disabled
+      ? ["  Disabled (unrestricted network access)"]
+      : [
+          `  Allowed domains: ${config.network?.allowedDomains?.join(", ") || "(none)"}`,
+          ...(allowsAllDomains(config.network?.allowedDomains)
+            ? ['  ⚠️ "*" allows all domains and disables per-domain prompts.']
+            : []),
+          `  Denied domains:  ${config.network?.deniedDomains?.join(", ") || "(none)"}`,
+          ...(allowances.domains.length
+            ? [`  Session allowed: ${allowances.domains.join(", ")}`]
+            : []),
+        ]),
     "",
     "Filesystem (bash + read/write/edit tools):",
     `  Deny Read:   ${config.filesystem?.denyRead?.join(", ") || "(none)"}`,

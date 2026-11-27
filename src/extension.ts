@@ -281,14 +281,16 @@ export default function (pi: ExtensionAPI) {
         if (
           (kind === "write" &&
             matchesPattern(target, config.filesystem?.denyWrite ?? [], ctx.cwd)) ||
-          (kind === "domain" && domainIsAllowed(target, config.network?.deniedDomains ?? []))
+          (kind === "domain" &&
+            !config.network?.disabled &&
+            domainIsAllowed(target, config.network?.deniedDomains ?? []))
         ) {
           throw new Error(`Sandbox: ${kind} access to "${target}" is explicitly denied.`);
         }
         const effective = resolveAllowances(config, allowances);
         const alreadyAllowed =
           kind === "domain"
-            ? domainIsAllowed(target, effective.domains)
+            ? Boolean(config.network?.disabled) || domainIsAllowed(target, effective.domains)
             : matchesPattern(
                 target,
                 kind === "read" ? effective.readPaths : effective.writePaths,
@@ -369,25 +371,27 @@ export default function (pi: ExtensionAPI) {
     }).getShellPath();
     const config = loadConfig(ctx.cwd, projectTrusted);
     if (config.sandboxUserShell === false) return;
-    for (const domain of extractDomainsFromCommand(event.command)) {
-      if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
-        const choice = await promptDomainBlock(
-          pi,
-          ctx,
-          domain,
-          config.permissionPromptTimeoutSeconds,
-        );
-        if (choice.action === "abort") {
-          return {
-            result: {
-              output: `Blocked: "${domain}" is not in allowedDomains. Use /sandbox to review your config.`,
-              exitCode: 1,
-              cancelled: false,
-              truncated: false,
-            },
-          };
+    if (!config.network?.disabled) {
+      for (const domain of extractDomainsFromCommand(event.command)) {
+        if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
+          const choice = await promptDomainBlock(
+            pi,
+            ctx,
+            domain,
+            config.permissionPromptTimeoutSeconds,
+          );
+          if (choice.action === "abort") {
+            return {
+              result: {
+                output: `Blocked: "${domain}" is not in allowedDomains. Use /sandbox to review your config.`,
+                exitCode: 1,
+                cancelled: false,
+                truncated: false,
+              },
+            };
+          }
+          await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
         }
-        await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
       }
     }
     return {
@@ -405,7 +409,7 @@ export default function (pi: ExtensionAPI) {
     if (!config.enabled) return;
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
 
-    if (sandboxInitialized && isToolCallEventType("bash", event)) {
+    if (sandboxInitialized && !config.network?.disabled && isToolCallEventType("bash", event)) {
       for (const domain of extractDomainsFromCommand(event.input.command)) {
         if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
           const choice = await promptDomainBlock(

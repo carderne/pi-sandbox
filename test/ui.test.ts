@@ -6,11 +6,14 @@ import assert from "node:assert/strict";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
   cancelPermissionPrompts,
+  formatSandboxConfiguration,
+  formatSandboxStatus,
   permissionOptions,
   permissionPromptRemainingSeconds,
   permissionPromptTimeoutMs,
   resetPermissionPrompts,
   showPermissionPrompt,
+  warnIfAllDomainsAllowed,
   warnIfLinuxUnenforcedGlobs,
 } from "../src/ui.ts";
 
@@ -391,4 +394,34 @@ test("aborting the context signal during a dialog grants nothing", { timeout: 5_
   lateController.abort();
   answers[0]!("Allow for this session only");
   assert.deepEqual(await latePrompt, { action: "abort", value: "example.test" });
+});
+
+test("network.disabled suppresses wildcard domain warning and reports disabled network status", () => {
+  const warnings: string[] = [];
+  const ctx = {
+    ui: { notify: (m: string, l: string) => l === "warning" && warnings.push(m) },
+  } as unknown as ExtensionContext;
+
+  const wildcardConfig = {
+    ...DEFAULT_CONFIG,
+    network: { ...DEFAULT_CONFIG.network!, allowedDomains: ["*"] },
+  };
+  warnIfAllDomainsAllowed(ctx, wildcardConfig);
+  assert.equal(warnings.length, 1);
+
+  const disabledNetworkConfig = {
+    ...wildcardConfig,
+    network: { ...wildcardConfig.network, disabled: true },
+  };
+  warnIfAllDomainsAllowed(ctx, disabledNetworkConfig);
+  assert.equal(warnings.length, 1);
+
+  assert.match(formatSandboxStatus(disabledNetworkConfig), /network disabled/);
+  const renderedConfig = formatSandboxConfiguration(
+    disabledNetworkConfig,
+    { globalPath: "/global/sandbox.json", projectPath: "/project/.pi/sandbox.json" },
+    { domains: ["session.example"], readPaths: [], writePaths: [] },
+  );
+  assert.match(renderedConfig, /Disabled \(unrestricted network access\)/);
+  assert.doesNotMatch(renderedConfig, /Allowed domains:/);
 });
