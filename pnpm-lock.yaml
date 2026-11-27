@@ -28,10 +28,10 @@ importers:
         version: 1.1.38
     devDependencies:
       '@earendil-works/pi-coding-agent':
-        specifier: 1.5.2
+        specifier: ^1.5.2
         version: 1.5.2(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(ws@8.21.1)(zod@4.4.3)
       '@earendil-works/pi-tui':
-        specifier: 1.5.2
+        specifier: ^1.5.2
         version: 1.5.2
       '@types/node':
         specifier: ^24
